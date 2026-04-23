@@ -697,19 +697,18 @@ def patch_goal_to_oracle(self_href: str, goal: dict) -> str:
 # --- Internal implementations (called by custom_tools_node) ---
 
 def _fetch_goals_by_period(review_period_id: int, limit: int = 100) -> list[dict]:
-    """Fetch goals from Oracle filtered by ReviewPeriodId using flat performanceGoals endpoint.
-    No GoalPlanId needed — uses PersonNumber + ReviewPeriodId filter."""
+    """Fetch goals using searchGoals endpoint filtered by ReviewPeriodId.
+    searchGoals returns ReviewPeriodId populated and filters correctly by PersonNumber."""
     url = (
-        f"{ORACLE_BASE_URL}/hcmRestApi/resources/latest/performanceGoals"
+        f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
         f"?q=PersonNumber={ORACLE_PERSON_NUMBER};ReviewPeriodId={review_period_id}"
         f"&orderBy=GoalId:desc&limit={limit}"
     )
-    resp = requests.get(url, auth=ORACLE_WRITE_AUTH, timeout=10)
+    resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
     resp.raise_for_status()
     goals = resp.json().get("items", [])
     for g in goals:
-        g.setdefault("StatusCodeMeaning", g.get("StatusMeaning", ""))
-        g.setdefault("StatusCode", g.get("Status", ""))
+        g.setdefault("StatusCodeMeaning", g.get("StatusCodeMeaning") or g.get("StatusMeaning", ""))
     return goals
 
 
