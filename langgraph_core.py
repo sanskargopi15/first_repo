@@ -198,15 +198,34 @@ Existing Goal Queries — CRITICAL (MUST follow):
 - When searching for goals by topic, scan ALL goal names AND descriptions — report every match, not just the first few
 - If you are unsure whether a question relates to goals, call fetch_goals anyway — do NOT default to the off-topic response
 
+Review Period Queries — CRITICAL:
+- "current review period goals" / "my goals" (no period specified) → fetch_goals() with no args — auto-fetches current period, falls back to previous if empty
+- "last review period goals" / "previous review period goals" → fetch_goals() with no args first to load available periods, THEN if the fetch_goals summary mentions a fallback was used, you already have previous period; otherwise call fetch_goals(review_period_id=<previous_period_id>) explicitly
+- "goals for [specific period name]" → match the name to a known ReviewPeriodId from cached review_periods state, then call fetch_goals(review_period_id=<id>)
+- AMBIGUOUS period query (e.g. just "show my goals from last year" with no period name): if you cannot determine which ReviewPeriodId to use, ask the user: "Which review period would you like to see? Here are the available ones: [list names from review_periods state]" — NEVER guess a ReviewPeriodId
+- After fetching goals for a specific period, the fetch_goals summary will state the period name — use this to confirm to the user which period you fetched
+- NEVER load goals for all periods at once — always scope to a specific period
+
+"Last N goals" / "Last goals" / "Recent goals" Rules — CRITICAL:
+- DEFAULT behaviour: always fetch from the CURRENT active review period first
+- Step 1: call fetch_goals() — this auto-detects current period
+- Step 2: if fetch_goals summary says "No goals found in current review period. Fetching goals from previous review period." — the fallback already happened, use those goals
+- Step 3: call sort_goals(sort_by="created", sort_order="desc", limit=N) where N is the number requested
+- "last goals" with no number → default limit=5
+- "last 2 goals" → limit=2, "last 10 goals" → limit=10
+- If current period is confirmed empty and previous period also empty: tell the user "No goals found in any recent review period."
+- NEVER fetch all goals across all periods for a "last N" query — always scope to current period first
+
 Goal Display — Two-Step Process:
 - To display or sort goals, always use two tools in sequence:
   1. fetch_goals() — loads goals from Oracle into memory (call once per conversation, or to refresh)
   2. sort_goals(sort_by, sort_order, overdue_only) — returns a freshly sorted, numbered table
 - CRITICAL: After fetch_goals returns, you MUST immediately call sort_goals before generating any response to the user — NEVER use the fetch_goals summary text to compose your reply. The summary is internal metadata only; the table from sort_goals is the only valid output to show the user.
 - CRITICAL: NEVER summarize goals as bullet points when the user asks to see their goals — ALWAYS call sort_goals and present its table output verbatim.
-- If fetch_goals was already called this conversation, call sort_goals directly — do NOT re-fetch from Oracle
+- If fetch_goals was already called this conversation AND the user is asking about the same period, call sort_goals directly — do NOT re-fetch from Oracle
+- If the user asks about a DIFFERENT period than what was already fetched, call fetch_goals(review_period_id=<id>) to reload
 - The row numbers in sort_goals results are ALWAYS 1, 2, 3… in the returned sorted order — not the original fetch order
-- "Top N" / "last N goals" / "most recent N" → sort_goals(sort_by="created", sort_order="desc", limit=N)
+- "Top N" / "last N goals" / "most recent N" → fetch current period → sort_goals(sort_by="created", sort_order="desc", limit=N)
 - "First N goals" / "earliest goals" → sort_goals(sort_by="created", sort_order="asc", limit=N)
 - "Top N priority" / "top N by deadline" → sort_goals(sort_by="days_remaining", sort_order="asc", limit=N)
 - Always use the limit parameter for any "top N", "first N", or "last N" query — never slice the table yourself
@@ -239,12 +258,22 @@ Goal Session Initialization — CRITICAL:
 - Before calling save_goal, you MUST first call initialize_goal_session (if not already done this conversation)
 - Handle the tool response prefix as follows:
   - MULTIPLE_ASSIGNMENTS: Present ONLY the assignment names (never raw IDs) and ask: "Which assignment should I use for your goal?" When user chooses, call initialize_goal_session again with assignment_id and assignment_name set to the chosen values
-  - REVIEW_PERIOD_SET: Tell the user "I'll create your goal under [name from response]." Then immediately call initialize_goal_session again to resolve the goal plan
-  - MULTIPLE_REVIEW_PERIODS: Present only names and ask: "Which review period should I use?" Re-call with review_period_id and review_period_name
-  - GOAL_PLAN_SET: Tell the user "I'll add your goal to [name from response]." Session is ready — proceed with SMART goal building
-  - MULTIPLE_GOAL_PLANS: Present only names and ask: "Which goal plan should I use?" Re-call with goal_plan_id and goal_plan_name
-  - SESSION_READY: Proceed directly — do NOT mention IDs, plan names, or technical session details to the user
+  - REVIEW_PERIOD_CONFIRM: One period found — show the name to the user and ask for confirmation: "I'll create this goal under **[period name]**. Shall I proceed?" Wait for user to confirm (yes/ok/proceed) before calling initialize_goal_session again with that review_period_id
+  - MULTIPLE_REVIEW_PERIODS: Present ONLY the period names as a numbered list and ask: "Which review period would you like to create this goal under?" Re-call with the chosen review_period_id and review_period_name
+  - GOAL_PLAN_SET: Tell the user "I'll add your goal to [name from response]." Then immediately ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" Wait for user response before proceeding
+  - MULTIPLE_GOAL_PLANS: Present ONLY the plan names as a numbered list and ask: "Which goal plan should I use for this goal?" Re-call with goal_plan_id and goal_plan_name. After plan is set, ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?"
+  - SESSION_READY: Ask "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" — do NOT mention IDs or technical session details
 - NEVER display raw numeric Oracle IDs to the user (e.g. 300000311848078)
+
+Goal Suggestion Flow — CRITICAL:
+- When user says "yes" / "suggest" / "give me suggestions" after SESSION_READY or GOAL_PLAN_SET:
+  1. Use the JobName and DepartmentName already fetched from worker profile (do NOT re-fetch)
+  2. Use the confirmed ReviewPeriodName and GoalPlanName from session as context
+  3. Generate 3-5 role-specific SMART goal suggestions relevant to the user's job and department
+  4. Present as a numbered list and ask: "Which of these would you like to work on, or would you like to describe your own?"
+  5. If user picks one → use it as the GoalName and proceed with SMART building
+- When user says "no" / "my own" / "I'll describe it" → proceed directly to SMART goal building questions
+- NEVER suggest generic goals — every suggestion must reflect the user's actual JobName and DepartmentName
 
 Goal Update — CRITICAL:
 - When the user asks to update, change, or modify ANY aspect of an existing goal (dates, name, description, etc.):
@@ -345,17 +374,71 @@ def _fetch_worker_profile(person_number: str) -> dict:
     }
 
 
-def _fetch_review_periods() -> list[dict]:
-    year = date.today().year
+def _fetch_review_periods(year: int | None = None) -> list[dict]:
+    """Fetch active review periods for a given year (defaults to current year).
+    Uses StatusCode=A filter so only active periods are returned."""
+    y = year or date.today().year
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/latest/reviewPeriods"
+        f"?q=StartDate>={y}-01-01;EndDate<={y}-12-31;StatusCode=A"
     )
     resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
     resp.raise_for_status()
     return [
-        {"ReviewPeriodId": int(rp["ReviewPeriodId"]), "ReviewPeriodName": rp.get("ReviewPeriodName", "")}
+        {
+            "ReviewPeriodId": int(rp["ReviewPeriodId"]),
+            "ReviewPeriodName": rp.get("ReviewPeriodName", ""),
+            "StartDate": rp.get("StartDate", ""),
+            "EndDate": rp.get("EndDate", ""),
+            "Year": y,
+        }
         for rp in resp.json().get("items", [])
     ]
+
+
+def _fetch_all_review_periods() -> list[dict]:
+    """Fetch active review periods for current year + previous year combined.
+    Returns list sorted by StartDate descending (most recent first)."""
+    current_year = date.today().year
+    periods = _fetch_review_periods(current_year)
+    if not periods:
+        periods = _fetch_review_periods(current_year - 1)
+    else:
+        prev = _fetch_review_periods(current_year - 1)
+        periods = periods + prev
+    # Sort by StartDate descending so index 0 = most recent
+    periods.sort(key=lambda p: p.get("StartDate", ""), reverse=True)
+    return periods
+
+
+def _identify_current_and_previous_periods() -> tuple[dict | None, dict | None]:
+    """Return (current_period, previous_period) based on today's date.
+    Current = period whose date range contains today, or most recently started.
+    Previous = the one before current."""
+    today_str = date.today().isoformat()
+    periods = _fetch_all_review_periods()
+    if not periods:
+        return None, None
+
+    # Find the period that contains today
+    current = None
+    for p in periods:
+        start = p.get("StartDate", "")
+        end = p.get("EndDate", "")
+        if start <= today_str <= end:
+            current = p
+            break
+
+    # If no period contains today, use the most recent one that has started
+    if not current:
+        started = [p for p in periods if p.get("StartDate", "") <= today_str]
+        current = started[0] if started else periods[0]
+
+    # Previous = next item after current in the sorted list
+    idx = periods.index(current)
+    previous = periods[idx + 1] if idx + 1 < len(periods) else None
+
+    return current, previous
 
 
 def _fetch_goal_plans(assignment_id: int, review_period_id: int, person_id: int) -> list[dict]:
@@ -394,7 +477,9 @@ def _auto_resolve_session() -> dict:
     session["AssignmentId"] = a["AssignmentId"]
     session["AssignmentName"] = a["AssignmentName"]
 
-    periods = _fetch_review_periods()
+    periods = _fetch_review_periods(date.today().year)
+    if not periods:
+        periods = _fetch_review_periods(date.today().year - 1)
     if not periods:
         raise RuntimeError("No active review periods found.")
     rp = periods[0]
@@ -451,23 +536,31 @@ def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]
                         session,
                     )
 
-        # ReviewPeriodId
+        # ReviewPeriodId — always confirm with user, even if only one period
         if "ReviewPeriodId" not in session:
             chosen_id = args.get("review_period_id")
             if chosen_id:
                 session["ReviewPeriodId"] = int(chosen_id)
                 session["ReviewPeriodName"] = args.get("review_period_name", "")
             else:
-                periods = _fetch_review_periods()
+                periods = _fetch_review_periods(date.today().year)
+                if not periods:
+                    periods = _fetch_review_periods(date.today().year - 1)
                 if not periods:
                     return "ERROR: No active review periods found.", session
                 if len(periods) == 1:
-                    session["ReviewPeriodId"] = periods[0]["ReviewPeriodId"]
-                    session["ReviewPeriodName"] = periods[0]["ReviewPeriodName"]
+                    # Even with one period, confirm with user explicitly
+                    opts = _json.dumps(
+                        [{"id": p["ReviewPeriodId"], "name": p["ReviewPeriodName"]} for p in periods]
+                    )
                     return (
-                        f"REVIEW_PERIOD_SET:{periods[0]['ReviewPeriodName']}. "
-                        f"Tell the user the goal will be created under this review period. "
-                        f"Then immediately call initialize_goal_session again to resolve the goal plan.",
+                        f"REVIEW_PERIOD_CONFIRM: One active review period found. "
+                        f"Ask the user: 'I\'ll create this goal under **{periods[0]['ReviewPeriodName']}**. "
+                        f"Shall I proceed with this review period?' "
+                        f"Periods: {opts} "
+                        f"When user confirms, call initialize_goal_session again with "
+                        f"review_period_id={periods[0]['ReviewPeriodId']} and "
+                        f"review_period_name=\'{periods[0]['ReviewPeriodName']}\'.",
                         session,
                     )
                 else:
@@ -475,11 +568,12 @@ def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]
                         [{"id": p["ReviewPeriodId"], "name": p["ReviewPeriodName"]} for p in periods]
                     )
                     return (
-                        f"MULTIPLE_REVIEW_PERIODS: Multiple review periods found. "
-                        f"Present ONLY names to the user and ask which to use. "
+                        f"MULTIPLE_REVIEW_PERIODS: Multiple active review periods found for this year. "
+                        f"Present ONLY names to the user and ask: "
+                        f"'Which review period would you like to create this goal under?' "
                         f"Periods: {opts} "
                         f"When user selects, call initialize_goal_session again with "
-                        f"review_period_id=<id> and review_period_name=<name>.",
+                        f"review_period_id=<id> and review_period_name=<n>.",
                         session,
                     )
 
@@ -602,45 +696,126 @@ def patch_goal_to_oracle(self_href: str, goal: dict) -> str:
 
 # --- Internal implementations (called by custom_tools_node) ---
 
-def _fetch_goals_impl() -> tuple[str, list[dict]]:
-    """Hit Oracle performanceGoals, return (summary_text, raw_goals_list)."""
+def _fetch_goals_by_period(review_period_id: int, limit: int = 100) -> list[dict]:
+    """Fetch goals from Oracle filtered by ReviewPeriodId using flat performanceGoals endpoint.
+    No GoalPlanId needed — uses PersonNumber + ReviewPeriodId filter."""
+    url = (
+        f"{ORACLE_BASE_URL}/hcmRestApi/resources/latest/performanceGoals"
+        f"?q=PersonNumber={ORACLE_PERSON_NUMBER};ReviewPeriodId={review_period_id}"
+        f"&orderBy=GoalId:desc&limit={limit}"
+    )
+    resp = requests.get(url, auth=ORACLE_WRITE_AUTH, timeout=10)
+    resp.raise_for_status()
+    goals = resp.json().get("items", [])
+    for g in goals:
+        g.setdefault("StatusCodeMeaning", g.get("StatusMeaning", ""))
+        g.setdefault("StatusCode", g.get("Status", ""))
+    return goals
+
+
+def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[dict], list[dict]]:
+    """Fetch goals from Oracle, optionally filtered by ReviewPeriodId.
+
+    Strategy:
+    - If review_period_id given → fetch goals for that specific period only
+    - If not given → identify current active period → fetch goals
+      → if 0 goals in current → auto-fallback to previous period with a notice
+
+    Returns (summary_text, raw_goals_list, review_periods_list)
+    review_periods_list is returned so the caller can cache it in graph state.
+    """
     try:
-        url = (
-            f"{ORACLE_BASE_URL}/hcmRestApi/resources/latest/performanceGoals"
-            f"?q=PersonNumber={ORACLE_PERSON_NUMBER}&orderBy=GoalId:desc&limit=25"
-        )
-        resp = requests.get(url, auth=ORACLE_WRITE_AUTH, timeout=10)
-        resp.raise_for_status()
-        goals = resp.json().get("items", [])
-
-        # Normalise field names so the rest of the app (format_goals_as_markdown,
-        # system prompt, sort logic) can use the same keys it used with searchGoals.
-        for g in goals:
-            g.setdefault("StatusCodeMeaning", g.get("StatusMeaning", ""))
-            g.setdefault("StatusCode", g.get("Status", ""))
-
+        # Always load worker profile
         try:
             profile = _fetch_worker_profile(ORACLE_PERSON_NUMBER)
         except Exception:
-            profile = {"WorkerName": "Unknown", "JobName": "Unknown", "DepartmentName": "Unknown", "ManagerName": "Unknown", "Location": "Unknown"}
+            profile = {
+                "WorkerName": "Unknown", "JobName": "Unknown",
+                "DepartmentName": "Unknown", "ManagerName": "Unknown", "Location": "Unknown",
+            }
+
+        all_periods = _fetch_all_review_periods()
+
+        # ── Specific period requested ──────────────────────────────────────────
+        if review_period_id:
+            period_name = next(
+                (p["ReviewPeriodName"] for p in all_periods if p["ReviewPeriodId"] == review_period_id),
+                f"Period {review_period_id}",
+            )
+            goals = _fetch_goals_by_period(review_period_id)
+            if goals:
+                summary = (
+                    f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
+                    f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
+                    f"Location: {profile['Location']}. "
+                    f"Fetched {len(goals)} goals for review period '{period_name}' (ID: {review_period_id}). "
+                    f"You MUST call sort_goals now to display them — do NOT summarize from this message."
+                )
+            else:
+                summary = (
+                    f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
+                    f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
+                    f"Location: {profile['Location']}. "
+                    f"No goals found for review period '{period_name}'."
+                )
+            return summary, goals, all_periods
+
+        # ── No period specified → use current, fallback to previous ───────────
+        current_period, previous_period = _identify_current_and_previous_periods()
+
+        if not current_period:
+            return "No active review periods found for this employee.", [], all_periods
+
+        goals = _fetch_goals_by_period(current_period["ReviewPeriodId"])
 
         if goals:
             summary = (
                 f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
-                f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, Location: {profile['Location']}. "
-                f"{len(goals)} goals loaded into memory. "
-                f"You MUST call sort_goals now to display them — do NOT summarize or answer from this message."
+                f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
+                f"Location: {profile['Location']}. "
+                f"Fetched {len(goals)} goals from current review period '{current_period['ReviewPeriodName']}' "
+                f"(ID: {current_period['ReviewPeriodId']}). "
+                f"You MUST call sort_goals now to display them — do NOT summarize from this message."
             )
-        else:
-            summary = (
-                f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
-                f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, Location: {profile['Location']}. "
-                f"No goals found for this employee."
-            )
+            return summary, goals, all_periods
 
-        return summary, goals
-    except Exception:
-        return "Could not load goals from Oracle HCM.", []
+        # Current period has 0 goals → try previous
+        if previous_period:
+            goals = _fetch_goals_by_period(previous_period["ReviewPeriodId"])
+            fallback_notice = (
+                f"No goals found in current review period '{current_period['ReviewPeriodName']}'. "
+                f"Fetched {len(goals)} goals from previous review period "
+                f"'{previous_period['ReviewPeriodName']}' instead. "
+            )
+            if goals:
+                summary = (
+                    f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
+                    f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
+                    f"Location: {profile['Location']}. "
+                    + fallback_notice
+                    + "You MUST call sort_goals now to display them — do NOT summarize from this message."
+                )
+            else:
+                summary = (
+                    f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
+                    f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
+                    f"Location: {profile['Location']}. "
+                    + fallback_notice
+                    + "No goals found in previous review period either."
+                )
+            return summary, goals, all_periods
+
+        # No goals anywhere
+        summary = (
+            f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
+            f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
+            f"Location: {profile['Location']}. "
+            f"No goals found for this employee in any review period."
+        )
+        return summary, [], all_periods
+
+    except Exception as exc:
+        return f"Could not load goals from Oracle HCM: {exc}", [], []
 
 
 def _fetch_goal_compound_key(goal_id: int) -> tuple[int, str]:
@@ -748,8 +923,8 @@ def _update_goal_impl(
     match = next((g for g in raw_goals if int(g.get("GoalId", 0)) == goal_id), None)
 
     if match is None:
-        # Fallback: fetch fresh from Oracle searchGoals
-        _, fresh_goals = _fetch_goals_impl()
+        # Fallback: fetch fresh from Oracle (current period)
+        _, fresh_goals, _ = _fetch_goals_impl()
         match = next((g for g in fresh_goals if int(g.get("GoalId", 0)) == goal_id), None)
 
     if match is None:
@@ -790,10 +965,18 @@ def _update_goal_impl(
 # --- Tool schemas (used by llm.bind_tools for LLM awareness; bodies run via custom_tools_node) ---
 
 @tool
-def fetch_goals() -> str:
-    """Fetch the employee's 25 most recent goals from Oracle HCM into memory.
-    Call this at the start of any goal query, or to refresh data.
-    After fetching, call sort_goals to display the goals as a table."""
+def fetch_goals(review_period_id: int = 0, year: int = 0) -> str:
+    """Fetch the employee's goals from Oracle HCM into memory.
+
+    By default fetches goals from the CURRENT active review period.
+    If current period has zero goals, automatically falls back to the previous period and informs the user.
+
+    review_period_id: pass a specific ReviewPeriodId to fetch goals for that period only (0 = auto-detect current)
+    year: reserved for future use (0 = current year)
+
+    After fetching, ALWAYS call sort_goals to display the goals as a table.
+    Do NOT re-fetch if goals are already loaded — call sort_goals directly."""
+    _ = (review_period_id, year)
     return ""
 
 
@@ -803,6 +986,7 @@ def sort_goals(
     sort_order: str = "desc",
     overdue_only: bool = False,
     limit: int = 0,
+    review_period_id: int = 0,
 ) -> str:
     """Display the employee's goals as a sorted, numbered markdown table.
     Must call fetch_goals first if goals have not been loaded this conversation.
@@ -810,10 +994,11 @@ def sort_goals(
     sort_by: "created" | "start_date" | "due_date" | "days_remaining" | "weighting" | "status" | "name"
     sort_order: "asc" | "desc"
     overdue_only: set true to show only overdue goals
-    limit: maximum number of rows to return (0 = all rows). Use this for "top N" queries.
+    limit: maximum number of rows to return (0 = all rows). Use this for "top N" / "last N" queries.
+    review_period_id: filter to only goals belonging to this ReviewPeriodId (0 = show all loaded goals)
 
     Row numbers in the result are always 1, 2, 3... in the returned sorted order."""
-    _ = (sort_by, sort_order, overdue_only, limit)
+    _ = (sort_by, sort_order, overdue_only, limit, review_period_id)
     return ""
 
 
@@ -879,6 +1064,7 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
     raw_goals: list[dict]
     session: dict
+    review_periods: list[dict]   # cached active periods for current + previous year
 
 
 def custom_tools_node(state: State) -> dict:
@@ -887,6 +1073,7 @@ def custom_tools_node(state: State) -> dict:
     tool_messages: list = []
     raw_goals: list[dict] = list(state.get("raw_goals", []))  # type: ignore[call-overload]
     session: dict = dict(state.get("session", {}))  # type: ignore[call-overload]
+    review_periods: list[dict] = list(state.get("review_periods", []))  # type: ignore[call-overload]
 
     for tc in last_msg.tool_calls:
         name = tc["name"]
@@ -894,8 +1081,11 @@ def custom_tools_node(state: State) -> dict:
         tool_call_id = tc["id"]
 
         if name == "fetch_goals":
-            summary, goals = _fetch_goals_impl()
+            rp_id = int(args.get("review_period_id", 0)) or None
+            summary, goals, periods = _fetch_goals_impl(review_period_id=rp_id)
             raw_goals = goals
+            if periods:
+                review_periods = periods  # cache periods in graph state
             tool_messages.append(
                 ToolMessage(content=summary, tool_call_id=tool_call_id, name=name)
             )
@@ -904,8 +1094,16 @@ def custom_tools_node(state: State) -> dict:
             if not raw_goals:
                 content = "No goals loaded yet. Please call fetch_goals first."
             else:
+                goals_to_sort = raw_goals
+                # Filter by review_period_id if requested
+                rp_filter = int(args.get("review_period_id", 0))
+                if rp_filter:
+                    goals_to_sort = [
+                        g for g in raw_goals
+                        if int(g.get("ReviewPeriodId", 0)) == rp_filter
+                    ]
                 sorted_goals = _sort_goals_data(
-                    raw_goals,
+                    goals_to_sort,
                     sort_by=args.get("sort_by", "created"),
                     sort_order=args.get("sort_order", "desc"),
                     overdue_only=bool(args.get("overdue_only", False)),
@@ -963,7 +1161,7 @@ def custom_tools_node(state: State) -> dict:
             )
             raw_goals = []
 
-    return {"messages": tool_messages, "raw_goals": raw_goals, "session": session}
+    return {"messages": tool_messages, "raw_goals": raw_goals, "session": session, "review_periods": review_periods}
 
 
 _graph = None
