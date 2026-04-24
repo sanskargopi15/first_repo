@@ -296,6 +296,39 @@ Goal Update — CRITICAL:
   - User is creating → gather SMART details → call initialize_goal_session → call save_goal
   - These two flows are MUTUALLY EXCLUSIVE. Never mix them.
 
+Goal Progress Update Rules — CRITICAL:
+- "Update my goal" (ambiguous) → ask: "Would you like to update the **goal details** (name, description, dates) or the **progress** (status, completion %)?"
+  - Goal details → use update_goal (existing interrupt card flow)
+  - Progress → use update_goal_progress (new flow below)
+- "I want to start my goal" / "mark goal as in progress" → progress flow with StatusCode=IN_PROGRESS, PercentCompletion=0
+- "Update progress of my goal to X%" → progress flow with PercentCompletion=X
+- "Mark goal as complete" / "I completed my goal" → progress flow with StatusCode=COMPLETED, PercentCompletion=100, ask for ActualCompletionDate
+- Progress flow steps:
+  1. If goals not loaded → call fetch_goals() first (always fetches current review period)
+  2. If no goals in current review period → tell user: "No active goals found in the current review period."
+  3. If goals exist → show them as a numbered list (call sort_goals) and ask: "Which goal would you like to update progress for?"
+  4. User selects a goal → confirm: "I'll mark **[GoalName]** as [Status] at [X]% completion. Shall I proceed?"
+  5. User confirms → call update_goal_progress(goal_id, status_code, percent_completion, actual_completion_date)
+  6. On success → confirm: "✅ **[GoalName]** has been updated to [Status] at [X]% completion."
+- NEVER call update_goal_progress without user confirmation
+- NEVER call update_goal_progress without goals being loaded first — GoalPlanGoalId is resolved from raw_goals automatically
+
+Progress Notes Rules — CRITICAL:
+- "Add a note to my goal" / "add progress note" → notes flow:
+  1. If goals not loaded → call fetch_goals()
+  2. If no goals in current review period → tell user: "No active goals found in the current review period."
+  3. Show goals as numbered list → ask: "Which goal would you like to add a note to?"
+  4. User selects goal → ask: "What would you like to note?" (if not already provided)
+  5. Call add_progress_note(goal_id, note_text)
+  6. On success → confirm: "✅ Progress note added to **[GoalName]**."
+- "Show progress notes" / "get notes for my goal" / "notes for my last goal" → notes query flow:
+  1. If goals not loaded → call fetch_goals()
+  2. If only one goal or user said "last goal" → use the most recently created goal (GoalId highest)
+  3. If multiple goals → show list and ask: "Which goal's notes would you like to see?"
+  4. Call get_progress_notes(goal_id)
+  5. Display returned notes as formatted text
+- visibility options for notes: MANAGERS_AND_SUBJECT (default), PUBLIC, PRIVATE — only ask if user specifies
+
 """
 
 
@@ -961,6 +994,91 @@ def _update_goal_impl(
     return "CANCELLED: The user dismissed the update form."
 
 
+# ── Progress update / notes implementations ────────────────────────────────────
+
+def _update_goal_progress_impl(
+    goal_id: int,
+    goal_plan_goal_id: int,
+    status_code: str,
+    percent_completion: int,
+    actual_completion_date: str | None,
+) -> str:
+    """POST to Oracle batch endpoint to update goal progress and status."""
+    url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
+    payload = {
+        "parts": [{
+            "id": f"performanceGoals{goal_id}",
+            "operation": "update",
+            "path": f"/performanceGoalsV2/{goal_id}",
+            "payload": {
+                "PercentCompletion": percent_completion,
+                "StatusCode": status_code,
+                "ActualCompletionDate": actual_completion_date,
+                "RequiredGPGId": str(goal_plan_goal_id),
+            }
+        }]
+    }
+    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, json=payload, timeout=15)
+    resp.raise_for_status()
+    return f"Goal progress updated — Status: {status_code}, Completion: {percent_completion}%"
+
+
+def _add_progress_note_impl(
+    goal_id: int,
+    worker_id: int,
+    note_text: str,
+    visibility: str = "MANAGERS_AND_SUBJECT",
+) -> str:
+    """POST a progress note to personNotesV2 linked to a goal."""
+    url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/personNotesV2"
+    payload = {
+        "NoteVisibilityCode": visibility,
+        "NoteText": f"<p>{note_text}</p>",
+        "AuthorId": str(worker_id),
+        "ContextId": goal_id,
+        "ContextType": "ORA_PERFORMANCE_GOAL",
+        "WorkerId": worker_id,
+    }
+    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, json=payload, timeout=15)
+    resp.raise_for_status()
+    return f"Progress note added successfully."
+
+
+def _get_progress_notes_impl(goal_id: int, worker_id: int, limit: int = 25) -> list[dict]:
+    """GET progress notes for a goal from personNotesV2."""
+    q = f"WorkerId%3D{worker_id}%20and%20ContextId%3D{goal_id}%20and%20ContextType%3D%27ORA_PERFORMANCE_GOAL%27"
+    fields = "NoteId,NoteText,AuthorName,CreationDate,NoteVisibilityMeaning,NoteVisibilityCode,LastUpdateDate"
+    url = (
+        f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/personNotesV2"
+        f"?q={q}&fields={fields}&limit={limit}&offset=0"
+    )
+    resp = requests.get(url, auth=ORACLE_AUTH, timeout=15)
+    resp.raise_for_status()
+    return resp.json().get("items", [])
+
+
+def _resolve_goal_from_raw(goal_id: int, raw_goals: list[dict]) -> dict | None:
+    """Find a goal by GoalId in the raw_goals list."""
+    return next((g for g in raw_goals if int(g.get("GoalId", 0)) == goal_id), None)
+
+
+def _format_notes_as_markdown(notes: list[dict]) -> str:
+    """Format progress notes into readable markdown."""
+    if not notes:
+        return "No progress notes found for this goal."
+    lines = []
+    for n in notes:
+        import html
+        import re
+        raw = n.get("NoteText", "")
+        clean = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
+        date = n.get("CreationDate", "")[:10]
+        author = n.get("AuthorName", "Unknown")
+        visibility = n.get("NoteVisibilityMeaning", "")
+        lines.append(f"**{author}** ({date}) — *{visibility}*\n> {clean}")
+    return "\n\n".join(lines)
+
+
 # --- Tool schemas (used by llm.bind_tools for LLM awareness; bodies run via custom_tools_node) ---
 
 @tool
@@ -1057,7 +1175,57 @@ def update_goal(
     return ""
 
 
-# --- Graph ---
+@tool
+def update_goal_progress(
+    goal_id: int,
+    status_code: str,
+    percent_completion: int = 0,
+    actual_completion_date: str = "",
+) -> str:
+    """Update the progress and/or status of an existing goal using the Oracle batch endpoint.
+
+    Use this ONLY for progress-related updates (status, percent completion, actual completion date).
+    Do NOT use this for updating goal name, description, or dates — use update_goal for those.
+
+    goal_id: GoalId from the fetched goals list
+    status_code: NOT_STARTED | IN_PROGRESS | COMPLETED
+    percent_completion: 0-100 (default 0). Set to 100 when marking COMPLETED.
+    actual_completion_date: YYYY-MM-DD — only required when StatusCode=COMPLETED
+
+    Before calling this tool, goals MUST already be loaded (fetch_goals called).
+    The GoalPlanGoalId is resolved automatically from raw_goals."""
+    _ = (goal_id, status_code, percent_completion, actual_completion_date)
+    return ""
+
+
+@tool
+def add_progress_note(
+    goal_id: int,
+    note_text: str,
+    visibility: str = "MANAGERS_AND_SUBJECT",
+) -> str:
+    """Add a progress note to a goal via personNotesV2.
+
+    goal_id: GoalId from the fetched goals list
+    note_text: plain text content of the note (do NOT wrap in HTML tags)
+    visibility: MANAGERS_AND_SUBJECT (default) | PUBLIC | PRIVATE
+
+    Before calling, goals must be loaded so WorkerId can be resolved from raw_goals."""
+    _ = (goal_id, note_text, visibility)
+    return ""
+
+
+@tool
+def get_progress_notes(goal_id: int) -> str:
+    """Fetch and display all progress notes for a specific goal.
+
+    goal_id: GoalId from the fetched goals list.
+    Goals must already be loaded (fetch_goals called) so WorkerId can be resolved.
+
+    Use this when user asks: 'show my progress notes', 'notes for my last goal',
+    'what notes are on this goal', etc."""
+    _ = goal_id
+    return ""
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
@@ -1160,6 +1328,79 @@ def custom_tools_node(state: State) -> dict:
             )
             raw_goals = []
 
+        elif name == "update_goal_progress":
+            goal_id = int(args["goal_id"])
+            goal = _resolve_goal_from_raw(goal_id, raw_goals)
+            if not goal:
+                content = f"Goal {goal_id} not found in loaded goals. Please call fetch_goals first."
+            else:
+                gpg_id = goal.get("GoalPlanGoalId")
+                if not gpg_id:
+                    content = "Could not find GoalPlanGoalId for this goal. Cannot update progress."
+                else:
+                    try:
+                        pct = int(args.get("percent_completion", 0))
+                        status = args["status_code"]
+                        actual_date = args.get("actual_completion_date") or None
+                        content = _update_goal_progress_impl(
+                            goal_id=goal_id,
+                            goal_plan_goal_id=int(gpg_id),
+                            status_code=status,
+                            percent_completion=pct,
+                            actual_completion_date=actual_date,
+                        )
+                        raw_goals = []  # force re-fetch next time
+                    except Exception as e:
+                        content = f"Failed to update goal progress: {e}"
+            tool_messages.append(
+                ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
+            )
+
+        elif name == "add_progress_note":
+            goal_id = int(args["goal_id"])
+            goal = _resolve_goal_from_raw(goal_id, raw_goals)
+            if not goal:
+                content = f"Goal {goal_id} not found in loaded goals. Please call fetch_goals first."
+            else:
+                worker_id = goal.get("WorkerId")
+                if not worker_id:
+                    content = "Could not find WorkerId for this goal. Cannot add note."
+                else:
+                    try:
+                        content = _add_progress_note_impl(
+                            goal_id=goal_id,
+                            worker_id=int(worker_id),
+                            note_text=args["note_text"],
+                            visibility=args.get("visibility", "MANAGERS_AND_SUBJECT"),
+                        )
+                    except Exception as e:
+                        content = f"Failed to add progress note: {e}"
+            tool_messages.append(
+                ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
+            )
+
+        elif name == "get_progress_notes":
+            goal_id = int(args["goal_id"])
+            goal = _resolve_goal_from_raw(goal_id, raw_goals)
+            if not goal:
+                content = f"Goal {goal_id} not found in loaded goals. Please call fetch_goals first."
+            else:
+                worker_id = goal.get("WorkerId")
+                if not worker_id:
+                    content = "Could not find WorkerId for this goal. Cannot fetch notes."
+                else:
+                    try:
+                        notes = _get_progress_notes_impl(
+                            goal_id=goal_id,
+                            worker_id=int(worker_id),
+                        )
+                        content = _format_notes_as_markdown(notes)
+                    except Exception as e:
+                        content = f"Failed to fetch progress notes: {e}"
+            tool_messages.append(
+                ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
+            )
+
     return {"messages": tool_messages, "raw_goals": raw_goals, "session": session, "review_periods": review_periods}
 
 
@@ -1170,7 +1411,7 @@ def get_graph():
     global _graph
     if _graph is None:
         llm = ChatAnthropic(model=MODEL, max_tokens=4096, temperature=0.2, api_key=os.environ["ANTHROPIC_API_KEY"])  # type: ignore[call-arg]
-        tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal]
+        tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal, update_goal_progress, add_progress_note, get_progress_notes]
         llm_with_tools = llm.bind_tools(tools)
 
         def assistant_node(state: State):
