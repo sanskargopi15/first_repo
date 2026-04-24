@@ -56,11 +56,22 @@ Role Awareness — CRITICAL:
 - For example, if their job is "Software Engineer", frame goals around technical delivery, code quality, or system design — not generic topics
 - Never ask "what is your role?" — you already know it from the fetched data
 
-Goal Suggestions — Role-Specific ONLY:
+Goal Plans Queries — CRITICAL:
+- When user asks "show my goal plans", "what goal plans do I have", "show goal plan names", or any question about goal plans → call get_goal_plans() immediately
+- get_goal_plans() fetches assigned plans for the current review period and displays them with the period name
+- NEVER say "I'm here to help with goal setting" for goal plan queries — they are valid goal-related questions
+- After showing goal plans, ask if the user wants to create a goal under one of them or see their existing goals
+
+Goal Suggestions — Role-Specific AND Period/Plan Aware:
 - When the user asks you to suggest, recommend, or give examples of goals, ALL suggestions MUST be directly tied to their JobName and DepartmentName from the fetched data
 - Never suggest generic goals that could apply to any employee — every suggestion must reflect the responsibilities, skills, and deliverables typical of their specific role
 - Always call fetch_goals first (if not already done) so you have the user's actual JobName before making any suggestions
 - Frame each suggestion as a concrete, role-relevant outcome — not a vague aspiration
+- When suggesting goals (outside of creation flow), ALWAYS start with:
+  1. Confirm the review period: "I'll suggest goals for the **[current review period name]** review period."
+  2. Call get_goal_plans() to show available plans and ask: "Which goal plan would you like these goals to be created under?"
+  3. After user selects a plan → generate 3-5 role-specific SMART suggestions
+  4. Ask: "Which of these would you like to work on, or would you prefer to describe your own?"
 
 Role-Profile Mismatch Detection:
 - When the user describes a goal, compare it against their JobName from the fetched goal data.
@@ -260,18 +271,19 @@ Goal Session Initialization — CRITICAL:
   - MULTIPLE_ASSIGNMENTS: Present ONLY the assignment names (never raw IDs) and ask: "Which assignment should I use for your goal?" When user chooses, call initialize_goal_session again with assignment_id and assignment_name set to the chosen values
   - REVIEW_PERIOD_CONFIRM: One period found — show the name to the user and ask for confirmation: "I'll create this goal under **[period name]**. Shall I proceed?" Wait for user to confirm (yes/ok/proceed) before calling initialize_goal_session again with that review_period_id
   - MULTIPLE_REVIEW_PERIODS: Present ONLY the period names as a numbered list and ask: "Which review period would you like to create this goal under?" Re-call with the chosen review_period_id and review_period_name
-  - GOAL_PLAN_SET: Tell the user "I'll add your goal to [name from response]." Then immediately ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" Wait for user response before proceeding
-  - MULTIPLE_GOAL_PLANS: Present ONLY the plan names as a numbered list and ask: "Which goal plan should I use for this goal?" Re-call with goal_plan_id and goal_plan_name. After plan is set, ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?"
-  - SESSION_READY: Ask "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" — do NOT mention IDs or technical session details
+  - GOAL_PLAN_SET: Tell the user "I'll add your goal to **[plan name]** under the **[review period name]** review period." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" Wait for user response before proceeding
+  - MULTIPLE_GOAL_PLANS: Present ONLY the plan names as a numbered list and ask: "Which goal plan should I use for this goal?" Re-call with goal_plan_id and goal_plan_name. After plan is set, confirm: "I'll use **[plan name]** under **[review period name]**." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?"
+  - SESSION_READY: Confirm to user: "I'll create your goal under **[ReviewPeriodName]** in **[GoalPlanName]**." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" — do NOT mention IDs or technical session details
 - NEVER display raw numeric Oracle IDs to the user (e.g. 300000311848078)
 
 Goal Suggestion Flow — CRITICAL:
 - When user says "yes" / "suggest" / "give me suggestions" after SESSION_READY or GOAL_PLAN_SET:
   1. Use the JobName and DepartmentName already fetched from worker profile (do NOT re-fetch)
   2. Use the confirmed ReviewPeriodName and GoalPlanName from session as context
-  3. Generate 3-5 role-specific SMART goal suggestions relevant to the user's job and department
-  4. Present as a numbered list and ask: "Which of these would you like to work on, or would you like to describe your own?"
-  5. If user picks one → use it as the GoalName and proceed with SMART building
+  3. State clearly: "Here are some suggested goals for your role as **[JobName]** in **[DepartmentName]** for the **[ReviewPeriodName]** period:"
+  4. Generate 3-5 role-specific SMART goal suggestions relevant to the user's job and department
+  5. Present as a numbered list and ask: "Which of these would you like to work on, or would you prefer to describe your own?"
+  6. If user picks one → use it as the GoalName and proceed with SMART building
 - When user says "no" / "my own" / "I'll describe it" → proceed directly to SMART goal building questions
 - NEVER suggest generic goals — every suggestion must reflect the user's actual JobName and DepartmentName
 
@@ -302,6 +314,8 @@ Goal Progress Update Rules — CRITICAL:
   - Progress → use update_goal_progress (new flow below)
 - "I want to start my goal" / "mark goal as in progress" → progress flow with StatusCode=IN_PROGRESS, PercentCompletion=0
 - "Update progress of my goal to X%" → progress flow with PercentCompletion=X
+  - IMPORTANT: Oracle only accepts multiples of 25 → valid values are 0, 25, 50, 75, 100
+  - If user says a non-multiple (e.g. "30%", "60%"), tell them: "Oracle only accepts completion in steps of 25% (0, 25, 50, 75, 100). I'll round 30% to 25% — shall I proceed?" and confirm before calling
 - "Mark goal as complete" / "I completed my goal" → progress flow with StatusCode=COMPLETED, PercentCompletion=100, ask for ActualCompletionDate
 - Progress flow steps:
   1. If goals not loaded → call fetch_goals() first (always fetches current review period)
@@ -1003,8 +1017,18 @@ def _update_goal_progress_impl(
     percent_completion: int,
     actual_completion_date: str | None,
 ) -> str:
-    """POST to Oracle batch endpoint to update goal progress and status."""
-    url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
+    """POST to Oracle batch endpoint to update goal progress and status.
+    Uses correct Content-Type and REST-Framework-Version headers."""
+    # Oracle requires PercentCompletion to be a multiple of 25
+    valid = [0, 25, 50, 75, 100]
+    if percent_completion not in valid:
+        percent_completion = min(valid, key=lambda x: abs(x - percent_completion))
+
+    url = f"{ORACLE_BASE_URL}/hcmRestApi/rest/rv:cbceab95-3fe1-4e78-b21a-57457d97374f/en/11.13.18.05:9/"
+    headers = {
+        "Content-Type": "application/vnd.oracle.adf.batch+json",
+        "REST-Framework-Version": "4",
+    }
     payload = {
         "parts": [{
             "id": f"performanceGoals{goal_id}",
@@ -1018,43 +1042,111 @@ def _update_goal_progress_impl(
             }
         }]
     }
-    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, json=payload, timeout=15)
+    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, headers=headers, json=payload, timeout=15)
     resp.raise_for_status()
     return f"Goal progress updated — Status: {status_code}, Completion: {percent_completion}%"
 
 
 def _add_progress_note_impl(
     goal_id: int,
+    author_id: int,
     worker_id: int,
     note_text: str,
     visibility: str = "MANAGERS_AND_SUBJECT",
 ) -> str:
-    """POST a progress note to personNotesV2 linked to a goal."""
-    url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/personNotesV2"
-    payload = {
-        "NoteVisibilityCode": visibility,
-        "NoteText": f"<p>{note_text}</p>",
-        "AuthorId": str(worker_id),
-        "ContextId": goal_id,
-        "ContextType": "ORA_PERFORMANCE_GOAL",
-        "WorkerId": worker_id,
+    """Two-step process to add a progress note:
+    Step 1: POST to personNotes to create the note record
+    Step 2: PUT plain text to personNotes/{uniqID}/enclosure/NoteText
+    """
+    base_url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/personNotes"
+
+    # Step 1 — create note record
+    step1_headers = {
+        "Content-Type": "application/vnd.oracle.adf.resourceitem+json",
+        "REST-Framework-Version": "4",
     }
-    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, json=payload, timeout=15)
-    resp.raise_for_status()
-    return f"Progress note added successfully."
-
-
-def _get_progress_notes_impl(goal_id: int, worker_id: int, limit: int = 25) -> list[dict]:
-    """GET progress notes for a goal from personNotesV2."""
-    q = f"WorkerId%3D{worker_id}%20and%20ContextId%3D{goal_id}%20and%20ContextType%3D%27ORA_PERFORMANCE_GOAL%27"
-    fields = "NoteId,NoteText,AuthorName,CreationDate,NoteVisibilityMeaning,NoteVisibilityCode,LastUpdateDate"
-    url = (
-        f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/personNotesV2"
-        f"?q={q}&fields={fields}&limit={limit}&offset=0"
+    step1_payload = {
+        "AuthorId": author_id,
+        "WorkerId": worker_id,
+        "NoteVisibilityCode": visibility,
+        "ContextType": "ORA_PERFORMANCE_GOAL",
+        "ContextId": goal_id,
+    }
+    resp1 = requests.post(
+        base_url, auth=ORACLE_WRITE_AUTH, headers=step1_headers,
+        json=step1_payload, timeout=15
     )
-    resp = requests.get(url, auth=ORACLE_AUTH, timeout=15)
+    resp1.raise_for_status()
+
+    # Extract uniqID from self link in response
+    note_data = resp1.json()
+    note_uniq_id = None
+    for link in note_data.get("links", []):
+        if link.get("rel") == "self" and "href" in link:
+            href = link["href"]
+            parts = href.split("/personNotes/")
+            if len(parts) > 1:
+                note_uniq_id = parts[1].split("?")[0]
+                break
+
+    if not note_uniq_id:
+        return "Note record created but could not attach text — uniqID not found in response."
+
+    # Step 2 — PUT the note text as plain text
+    step2_url = f"{base_url}/{note_uniq_id}/enclosure/NoteText"
+    step2_headers = {
+        "Content-Type": "text/plain",
+        "REST-Framework-Version": "4",
+    }
+    resp2 = requests.put(
+        step2_url, auth=ORACLE_WRITE_AUTH, headers=step2_headers,
+        data=note_text.encode("utf-8"), timeout=15
+    )
+    resp2.raise_for_status()
+    return "Progress note added successfully."
+
+
+def _get_progress_notes_impl(goal_id: int, limit: int = 25) -> list[dict]:
+    """GET progress notes for a goal from personNotes.
+    Step 1: fetch note records filtered by ContextId + ContextType
+    Step 2: for each note, fetch actual text from enclosure/NoteText
+    """
+    headers = {"REST-Framework-Version": "4"}
+    base_url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/personNotes"
+
+    # Step 1 — get note records
+    url = (
+        f"{base_url}"
+        f"?q=ContextId={goal_id};ContextType=ORA_PERFORMANCE_GOAL"
+        f"&limit={limit}&offset=0"
+    )
+    resp = requests.get(url, auth=ORACLE_AUTH, headers=headers, timeout=15)
     resp.raise_for_status()
-    return resp.json().get("items", [])
+    items = resp.json().get("items", [])
+
+    # Step 2 — fetch NoteText for each note via enclosure link
+    results = []
+    for note in items:
+        note_id = note.get("NoteId")
+        note_text = ""
+        if note_id:
+            try:
+                text_url = f"{base_url}/{note_id}/enclosure/NoteText"
+                tr = requests.get(text_url, auth=ORACLE_AUTH, headers=headers, timeout=10)
+                if tr.status_code == 200:
+                    note_text = tr.text.strip()
+            except Exception:
+                note_text = ""
+        results.append({
+            "NoteId": note_id,
+            "NoteText": note_text,
+            "AuthorName": note.get("AuthorName", "Unknown"),
+            "CreationDate": note.get("CreationDate", ""),
+            "NoteVisibilityMeaning": note.get("NoteVisibilityMeaning", ""),
+            "NoteVisibilityCode": note.get("NoteVisibilityCode", ""),
+            "LastUpdateDate": note.get("LastUpdateDate", ""),
+        })
+    return results
 
 
 def _resolve_goal_from_raw(goal_id: int, raw_goals: list[dict]) -> dict | None:
@@ -1063,23 +1155,65 @@ def _resolve_goal_from_raw(goal_id: int, raw_goals: list[dict]) -> dict | None:
 
 
 def _format_notes_as_markdown(notes: list[dict]) -> str:
-    """Format progress notes into readable markdown."""
+    """Format progress notes into readable markdown.
+    NoteText is already plain text fetched from enclosure/NoteText."""
     if not notes:
         return "No progress notes found for this goal."
     lines = []
     for n in notes:
-        import html
-        import re
-        raw = n.get("NoteText", "")
-        clean = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
-        date = n.get("CreationDate", "")[:10]
+        text = (n.get("NoteText") or "").strip()
+        date = (n.get("CreationDate") or "")[:10]
         author = n.get("AuthorName", "Unknown")
         visibility = n.get("NoteVisibilityMeaning", "")
-        lines.append(f"**{author}** ({date}) — *{visibility}*\n> {clean}")
+        lines.append(f"**{author}** ({date}) — *{visibility}*\n> {text or '(no text)'}")
     return "\n\n".join(lines)
 
 
 # --- Tool schemas (used by llm.bind_tools for LLM awareness; bodies run via custom_tools_node) ---
+
+
+def _fetch_goal_plans_for_display(review_period_id: int | None = None) -> tuple[list[dict], dict | None]:
+    """Fetch goal plans for the current (or specified) review period for display.
+    Returns (goal_plans_list, review_period_dict).
+    Resolves PersonId + AssignmentId automatically."""
+    # Get PersonId + AssignmentId
+    person_id = _fetch_person_id(ORACLE_PERSON_NUMBER)
+    assignments = _fetch_assignments(ORACLE_PERSON_NUMBER)
+    if not assignments:
+        return [], None
+    assignment = next((a for a in assignments if a["PrimaryAssignmentFlag"]), assignments[0])
+
+    # Get review period
+    if review_period_id:
+        all_periods = _fetch_all_review_periods()
+        period = next((p for p in all_periods if p["ReviewPeriodId"] == review_period_id), None)
+    else:
+        period, _ = _identify_current_and_previous_periods()
+
+    if not period:
+        return [], None
+
+    plans = _fetch_goal_plans(assignment["AssignmentId"], period["ReviewPeriodId"], person_id)
+    return plans, period
+
+
+@tool
+def get_goal_plans(review_period_id: int = 0) -> str:
+    """Fetch and display the employee's assigned goal plans from Oracle HCM.
+
+    By default fetches goal plans for the CURRENT active review period.
+    review_period_id: pass a specific ReviewPeriodId to fetch plans for that period (0 = current).
+
+    Use this when user asks:
+    - 'show my goal plans'
+    - 'what goal plans do I have'
+    - 'which goal plans am I assigned to'
+    - 'show goal plan names'
+    - Any question about goal plans
+
+    Returns a list of goal plan names with the review period context."""
+    _ = review_period_id
+    return ""
 
 @tool
 def fetch_goals(review_period_id: int = 0, year: int = 0) -> str:
@@ -1189,7 +1323,8 @@ def update_goal_progress(
 
     goal_id: GoalId from the fetched goals list
     status_code: NOT_STARTED | IN_PROGRESS | COMPLETED
-    percent_completion: 0-100 (default 0). Set to 100 when marking COMPLETED.
+    percent_completion: MUST be one of 0, 25, 50, 75, 100 — Oracle only accepts multiples of 25.
+        If user gives a non-multiple (e.g. 30%), round to nearest: 25 or 50. Always confirm with user.
     actual_completion_date: YYYY-MM-DD — only required when StatusCode=COMPLETED
 
     Before calling this tool, goals MUST already be loaded (fetch_goals called).
@@ -1220,10 +1355,13 @@ def get_progress_notes(goal_id: int) -> str:
     """Fetch and display all progress notes for a specific goal.
 
     goal_id: GoalId from the fetched goals list.
-    Goals must already be loaded (fetch_goals called) so WorkerId can be resolved.
+    Goals must already be loaded (fetch_goals called).
+
+    Fetches note records filtered by ContextId=goal_id and ContextType=ORA_PERFORMANCE_GOAL.
+    Then fetches the actual text for each note from enclosure/NoteText.
 
     Use this when user asks: 'show my progress notes', 'notes for my last goal',
-    'what notes are on this goal', etc."""
+    'what notes are on this goal', 'show progress notes for X goal' etc."""
     _ = goal_id
     return ""
 
@@ -1328,6 +1466,25 @@ def custom_tools_node(state: State) -> dict:
             )
             raw_goals = []
 
+        elif name == "get_goal_plans":
+            rp_id = int(args.get("review_period_id", 0)) or None
+            try:
+                plans, period = _fetch_goal_plans_for_display(review_period_id=rp_id)
+                if not plans:
+                    content = "No goal plans found for the current review period."
+                else:
+                    period_name = period["ReviewPeriodName"] if period else "current period"
+                    lines = [f"Your assigned goal plans for **{period_name}**:\n"]
+                    for i, p in enumerate(plans, 1):
+                        primary = " *(Primary)*" if p.get("PrimaryGoalPlanFlag") else ""
+                        lines.append(f"{i}. **{p['GoalPlanName']}**{primary}")
+                    content = "\n".join(lines)
+            except Exception as e:
+                content = f"Failed to fetch goal plans: {e}"
+            tool_messages.append(
+                ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
+            )
+
         elif name == "update_goal_progress":
             goal_id = int(args["goal_id"])
             goal = _resolve_goal_from_raw(goal_id, raw_goals)
@@ -1363,12 +1520,15 @@ def custom_tools_node(state: State) -> dict:
                 content = f"Goal {goal_id} not found in loaded goals. Please call fetch_goals first."
             else:
                 worker_id = goal.get("WorkerId")
+                # AuthorId = ManagerId (walter.gibson is the manager making the note)
+                author_id = goal.get("ManagerId") or worker_id
                 if not worker_id:
                     content = "Could not find WorkerId for this goal. Cannot add note."
                 else:
                     try:
                         content = _add_progress_note_impl(
                             goal_id=goal_id,
+                            author_id=int(author_id),
                             worker_id=int(worker_id),
                             note_text=args["note_text"],
                             visibility=args.get("visibility", "MANAGERS_AND_SUBJECT"),
@@ -1385,18 +1545,11 @@ def custom_tools_node(state: State) -> dict:
             if not goal:
                 content = f"Goal {goal_id} not found in loaded goals. Please call fetch_goals first."
             else:
-                worker_id = goal.get("WorkerId")
-                if not worker_id:
-                    content = "Could not find WorkerId for this goal. Cannot fetch notes."
-                else:
-                    try:
-                        notes = _get_progress_notes_impl(
-                            goal_id=goal_id,
-                            worker_id=int(worker_id),
-                        )
-                        content = _format_notes_as_markdown(notes)
-                    except Exception as e:
-                        content = f"Failed to fetch progress notes: {e}"
+                try:
+                    notes = _get_progress_notes_impl(goal_id=goal_id)
+                    content = _format_notes_as_markdown(notes)
+                except Exception as e:
+                    content = f"Failed to fetch progress notes: {e}"
             tool_messages.append(
                 ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
             )
@@ -1411,7 +1564,7 @@ def get_graph():
     global _graph
     if _graph is None:
         llm = ChatAnthropic(model=MODEL, max_tokens=4096, temperature=0.2, api_key=os.environ["ANTHROPIC_API_KEY"])  # type: ignore[call-arg]
-        tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal, update_goal_progress, add_progress_note, get_progress_notes]
+        tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal, get_goal_plans, update_goal_progress, add_progress_note, get_progress_notes]
         llm_with_tools = llm.bind_tools(tools)
 
         def assistant_node(state: State):
