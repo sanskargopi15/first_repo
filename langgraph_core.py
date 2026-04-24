@@ -57,8 +57,8 @@ Role Awareness — CRITICAL:
 - Never ask "what is your role?" — you already know it from the fetched data
 
 Goal Plans Queries — CRITICAL:
-- When user asks "show my goal plans", "what goal plans do I have", "show goal plan names", or any question about goal plans → call get_goal_plans() immediately
-- get_goal_plans() fetches assigned plans for the current review period and displays them with the period name
+- When user asks "show my goal plans", "what goal plans do I have", "show goal plan names", or any question about goal plans → call list_goal_plans(review_period_id=<current_period_id>) immediately
+- To get the current period ID, use the review_periods state if already cached; otherwise call list_review_periods() first to identify it
 - NEVER say "I'm here to help with goal setting" for goal plan queries — they are valid goal-related questions
 - After showing goal plans, ask if the user wants to create a goal under one of them or see their existing goals
 
@@ -69,7 +69,7 @@ Goal Suggestions — Role-Specific AND Period/Plan Aware:
 - Frame each suggestion as a concrete, role-relevant outcome — not a vague aspiration
 - When suggesting goals (outside of creation flow), ALWAYS start with:
   1. Confirm the review period: "I'll suggest goals for the **[current review period name]** review period."
-  2. Call get_goal_plans() to show available plans and ask: "Which goal plan would you like these goals to be created under?"
+  2. Call list_goal_plans(review_period_id=<current_period_id>) to show available plans and ask: "Which goal plan would you like these goals to be created under?"
   3. After user selects a plan → generate 3-5 role-specific SMART suggestions
   4. Ask: "Which of these would you like to work on, or would you prefer to describe your own?"
 
@@ -192,7 +192,8 @@ Field Requirements:
 - TargetCompletionDate: Ask if missing. Default to {default_end} if user doesn't specify
 
 Existing Goal Queries — CRITICAL (MUST follow):
-- When the user asks ANYTHING about their existing goals OR anything answerable from goal records, call fetch_goals FIRST (if not already called this conversation), then call sort_goals to display the table
+- EXCEPTION: When the user asks to VIEW, SEE, or CHECK their goals (with no specific data question), follow the "View Goals Flow" section instead of calling fetch_goals directly.
+- For all other goal data questions (status, due dates, insights, worker info, overdue, themes, etc.): call fetch_goals FIRST (if not already called this conversation), then call sort_goals to display the table
 - This includes but is not limited to: status, due dates, progress, topics, summary, count, weighting, prioritization, recommendations, manager, department, location, worker info, job, descriptions, overdue goals, upcoming deadlines, themes, patterns, or any other question that can be answered from goal records
 - Reason over the returned data to answer the question — use sort_goals with appropriate parameters for sorted/filtered views
 - Always respond in a clean, readable format (table or bullet points depending on context)
@@ -213,9 +214,34 @@ Review Period Queries — CRITICAL:
 - "current review period goals" / "my goals" (no period specified) → fetch_goals() with no args — auto-fetches current period, falls back to previous if empty
 - "last review period goals" / "previous review period goals" → fetch_goals() with no args first to load available periods, THEN if the fetch_goals summary mentions a fallback was used, you already have previous period; otherwise call fetch_goals(review_period_id=<previous_period_id>) explicitly
 - "goals for [specific period name]" → match the name to a known ReviewPeriodId from cached review_periods state, then call fetch_goals(review_period_id=<id>)
-- AMBIGUOUS period query (e.g. just "show my goals from last year" with no period name): if you cannot determine which ReviewPeriodId to use, ask the user: "Which review period would you like to see? Here are the available ones: [list names from review_periods state]" — NEVER guess a ReviewPeriodId
+- AMBIGUOUS period query (e.g. just "show my goals from last year" with no period name): if you cannot determine which ReviewPeriodId to use, ask the user: "For which review period would you like to see goals? Here are the available ones: [list names from review_periods state]" — NEVER guess a ReviewPeriodId
 - After fetching goals for a specific period, the fetch_goals summary will state the period name — use this to confirm to the user which period you fetched
 - NEVER load goals for all periods at once — always scope to a specific period
+
+View Goals Flow — CRITICAL:
+When the user asks to view, see, or check their goals (with no specific data question):
+1. Call list_review_periods() — present the names as a numbered list
+   - If the list marks one as "(current)", you can say "the current period is [name]"
+   - Ask: "For which review period would you like to view your goal plan?"
+   - If the user says "current review period" → use the period marked (current) — no need to re-call
+2. Once a review period is confirmed, call list_goal_plans(review_period_id=<id>)
+   - Present plan names as a numbered list
+   - Ask: "Which goal plan would you like to view?"
+3. Once both are confirmed:
+   - Call fetch_goals(review_period_id=<id>)
+   - Call sort_goals(review_period_id=<id>, goal_plan_id=<id>)
+4. NEVER skip steps 1–3 — always ask for both review period and goal plan before fetching
+5. NEVER display goals from a period or plan the user did not select
+
+Standalone Period and Plan Queries — CRITICAL:
+- "What review periods do I have?" / "Show me my review periods" / "List review periods"
+  → Call list_review_periods(). Present the names. Do NOT ask the user to pick unless they follow up with a view or create request.
+- "What goal plans do I have?" / "Show me my goal plans" / "Show goal plan names"
+  → First ask: "For which review period would you like to view your goal plan?"
+  → If the user answers, call list_goal_plans(review_period_id=<id>). Present the names.
+  → If the user says "current", resolve the current period from review_periods state (or call list_review_periods first), then call list_goal_plans.
+- NEVER guess or fabricate review period or goal plan names — always call the relevant tool.
+- NEVER show raw numeric IDs (e.g. 300000311848078) — only names.
 
 "Last N goals" / "Last goals" / "Recent goals" Rules — CRITICAL:
 - DEFAULT behaviour: always fetch from the CURRENT active review period first
@@ -231,7 +257,7 @@ Goal Display — Two-Step Process:
 - To display or sort goals, always use two tools in sequence:
   1. fetch_goals() — loads goals from Oracle into memory (call once per conversation, or to refresh)
   2. sort_goals(sort_by, sort_order, overdue_only) — returns a freshly sorted, numbered table
-- CRITICAL: After fetch_goals returns, you MUST immediately call sort_goals before generating any response to the user — NEVER use the fetch_goals summary text to compose your reply. The summary is internal metadata only; the table from sort_goals is the only valid output to show the user.
+- CRITICAL: After fetch_goals returns, you MUST call sort_goals before generating any response to the user — NEVER use the fetch_goals summary text to compose your reply. The summary is internal metadata only; the table from sort_goals is the only valid output to show the user. EXCEPTION: during the update flow, you may call list_goal_plans between fetch_goals and sort_goals to ask the user which goal plan to filter by (fetch_goals → list_goal_plans → user picks → sort_goals(goal_plan_id=<id>)). For all other flows, call sort_goals immediately after fetch_goals with no intermediate steps.
 - CRITICAL: NEVER summarize goals as bullet points when the user asks to see their goals — ALWAYS call sort_goals and present its table output verbatim.
 - If fetch_goals was already called this conversation AND the user is asking about the same period, call sort_goals directly — do NOT re-fetch from Oracle
 - If the user asks about a DIFFERENT period than what was already fetched, call fetch_goals(review_period_id=<id>) to reload
@@ -269,15 +295,13 @@ Goal Session Initialization — CRITICAL:
 - Before calling save_goal, you MUST first call initialize_goal_session (if not already done this conversation)
 - Handle the tool response prefix as follows:
   - MULTIPLE_ASSIGNMENTS: Present ONLY the assignment names (never raw IDs) and ask: "Which assignment should I use for your goal?" When user chooses, call initialize_goal_session again with assignment_id and assignment_name set to the chosen values
-  - REVIEW_PERIOD_CONFIRM: One period found — show the name to the user and ask for confirmation: "I'll create this goal under **[period name]**. Shall I proceed?" Wait for user to confirm (yes/ok/proceed) before calling initialize_goal_session again with that review_period_id
-  - MULTIPLE_REVIEW_PERIODS: Present ONLY the period names as a numbered list and ask: "Which review period would you like to create this goal under?" Re-call with the chosen review_period_id and review_period_name
-  - GOAL_PLAN_SET: Tell the user "I'll add your goal to **[plan name]** under the **[review period name]** review period." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" Wait for user response before proceeding
-  - MULTIPLE_GOAL_PLANS: Present ONLY the plan names as a numbered list and ask: "Which goal plan should I use for this goal?" Re-call with goal_plan_id and goal_plan_name. After plan is set, confirm: "I'll use **[plan name]** under **[review period name]**." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?"
-  - SESSION_READY: Confirm to user: "I'll create your goal under **[ReviewPeriodName]** in **[GoalPlanName]**." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" — do NOT mention IDs or technical session details
+  - MULTIPLE_GOAL_PLANS: First inform the user: "I'll create your goal for the **[ReviewPeriodName]** review period." (extract ReviewPeriodName from the tool response text). Then present ONLY the plan names as a numbered list and ask: "Which goal plan would you like to use?" Re-call initialize_goal_session with goal_plan_id and goal_plan_name set to the chosen values
+  - SESSION_READY: Tell the user "I'll create your goal under **[ReviewPeriodName]** in **[GoalPlanName]**." Then ask: "Would you like me to suggest some goals for your role, or would you prefer to describe your own goal?" — do NOT mention IDs or technical session details
+- The review period is auto-selected — NEVER ask the user to pick the review period during create or update flows
 - NEVER display raw numeric Oracle IDs to the user (e.g. 300000311848078)
 
 Goal Suggestion Flow — CRITICAL:
-- When user says "yes" / "suggest" / "give me suggestions" after SESSION_READY or GOAL_PLAN_SET:
+- When user says "yes" / "suggest" / "give me suggestions" after SESSION_READY:
   1. Use the JobName and DepartmentName already fetched from worker profile (do NOT re-fetch)
   2. Use the confirmed ReviewPeriodName and GoalPlanName from session as context
   3. State clearly: "Here are some suggested goals for your role as **[JobName]** in **[DepartmentName]** for the **[ReviewPeriodName]** period:"
@@ -286,11 +310,16 @@ Goal Suggestion Flow — CRITICAL:
   6. If user picks one → use it as the GoalName and proceed with SMART building
 - When user says "no" / "my own" / "I'll describe it" → proceed directly to SMART goal building questions
 - NEVER suggest generic goals — every suggestion must reflect the user's actual JobName and DepartmentName
+- CRITICAL — When calling initialize_goal_session after a suggestion flow: pass goal_plan_id=<id> and goal_plan_name=<name> using the plan the user already confirmed during suggestions — do NOT ask for it again.
 
 Goal Update — CRITICAL:
 - When the user asks to update, change, or modify ANY aspect of an existing goal (dates, name, description, etc.):
-  1. Call fetch_goals (if goals not loaded), then sort_goals — both silently, no narration
+  1. Call fetch_goals (if goals not loaded) — do NOT call sort_goals yet
   2. *** ABSOLUTE RULE: Do NOT call initialize_goal_session AT ANY POINT during an update flow. Calling initialize_goal_session when the user wants to update is a CRITICAL ERROR. ***
+  2a. Call list_goal_plans() with no arguments — the backend auto-selects the current review period
+      - Present plan names as a numbered list and ask: "Which goal plan's goals would you like to update?"
+      - EXCEPTION — if the user already named a specific goal (not just "update a goal"): skip step 2a and call update_goal(goal_id) immediately
+  2b. Then call sort_goals(goal_plan_id=<id>) to show the filtered goal list
   3. If the user did NOT specify a goal: after displaying the table, ask in a single message — list only goal names as a numbered list (e.g. "1. Strengthen HR-Business Alignment") — NEVER use "Row N" phrasing
   4. Once a specific goal is identified (either from context OR from the table), call update_goal(goal_id) IMMEDIATELY — do NOT ask any questions at all, do NOT ask "what would you like to change", do NOT list options, do NOT ask SMART questions, do NOT apply SMART refinement, do NOT generate a summary. The edit form lets the user change anything they want — your only job is to open it.
   5. Do NOT describe the UI card to the user — the interface handles it
@@ -421,40 +450,25 @@ def _fetch_worker_profile(person_number: str) -> dict:
     }
 
 
-def _fetch_review_periods(year: int | None = None) -> list[dict]:
-    """Fetch active review periods for a given year (defaults to current year).
-    Uses StatusCode=A filter so only active periods are returned."""
-    y = year or date.today().year
+def _fetch_all_review_periods() -> list[dict]:
+    """Fetch all review periods from Oracle (no date or status filter).
+    Returns list sorted by StartDate descending (most recent first)."""
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/latest/reviewPeriods"
-        f"?q=StartDate>={y}-01-01;EndDate<={y}-12-31;StatusCode=A"
+        "?onlyData=true&limit=100"
     )
     resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
     resp.raise_for_status()
-    return [
+    periods = [
         {
             "ReviewPeriodId": int(rp["ReviewPeriodId"]),
             "ReviewPeriodName": rp.get("ReviewPeriodName", ""),
             "StartDate": rp.get("StartDate", ""),
             "EndDate": rp.get("EndDate", ""),
-            "Year": y,
         }
         for rp in resp.json().get("items", [])
     ]
-
-
-def _fetch_all_review_periods() -> list[dict]:
-    """Fetch active review periods for current year + previous year combined.
-    Returns list sorted by StartDate descending (most recent first)."""
-    current_year = date.today().year
-    periods = _fetch_review_periods(current_year)
-    if not periods:
-        periods = _fetch_review_periods(current_year - 1)
-    else:
-        prev = _fetch_review_periods(current_year - 1)
-        periods = periods + prev
-    # Sort by StartDate descending so index 0 = most recent
-    periods.sort(key=lambda p: p.get("StartDate", ""), reverse=True)
+    periods.sort(key=lambda p: (p.get("StartDate", ""), p["ReviewPeriodId"]), reverse=True)
     return periods
 
 
@@ -506,8 +520,6 @@ def _fetch_goal_plans(assignment_id: int, review_period_id: int, person_id: int)
         }
         for gp in resp.json().get("items", [])
     ]
-    # TEMPORARY: hardcode UK 26 Goal Plan 1 so it is always selected
-    plans.append({"GoalPlanId": 300000311848078, "GoalPlanName": "UK 26 Goal Plan 1", "PrimaryGoalPlanFlag": True})
     return plans
 
 
@@ -524,9 +536,7 @@ def _auto_resolve_session() -> dict:
     session["AssignmentId"] = a["AssignmentId"]
     session["AssignmentName"] = a["AssignmentName"]
 
-    periods = _fetch_review_periods(date.today().year)
-    if not periods:
-        periods = _fetch_review_periods(date.today().year - 1)
+    periods = _fetch_all_review_periods()
     if not periods:
         raise RuntimeError("No active review periods found.")
     rp = periods[0]
@@ -583,46 +593,18 @@ def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]
                         session,
                     )
 
-        # ReviewPeriodId — always confirm with user, even if only one period
+        # ReviewPeriodId — auto-select current period; only ask if ambiguous
         if "ReviewPeriodId" not in session:
             chosen_id = args.get("review_period_id")
             if chosen_id:
                 session["ReviewPeriodId"] = int(chosen_id)
                 session["ReviewPeriodName"] = args.get("review_period_name", "")
             else:
-                periods = _fetch_review_periods(date.today().year)
-                if not periods:
-                    periods = _fetch_review_periods(date.today().year - 1)
-                if not periods:
+                current, _ = _identify_current_and_previous_periods()
+                if not current:
                     return "ERROR: No active review periods found.", session
-                if len(periods) == 1:
-                    # Even with one period, confirm with user explicitly
-                    opts = _json.dumps(
-                        [{"id": p["ReviewPeriodId"], "name": p["ReviewPeriodName"]} for p in periods]
-                    )
-                    return (
-                        f"REVIEW_PERIOD_CONFIRM: One active review period found. "
-                        f"Ask the user: 'I\'ll create this goal under **{periods[0]['ReviewPeriodName']}**. "
-                        f"Shall I proceed with this review period?' "
-                        f"Periods: {opts} "
-                        f"When user confirms, call initialize_goal_session again with "
-                        f"review_period_id={periods[0]['ReviewPeriodId']} and "
-                        f"review_period_name=\'{periods[0]['ReviewPeriodName']}\'.",
-                        session,
-                    )
-                else:
-                    opts = _json.dumps(
-                        [{"id": p["ReviewPeriodId"], "name": p["ReviewPeriodName"]} for p in periods]
-                    )
-                    return (
-                        f"MULTIPLE_REVIEW_PERIODS: Multiple active review periods found for this year. "
-                        f"Present ONLY names to the user and ask: "
-                        f"'Which review period would you like to create this goal under?' "
-                        f"Periods: {opts} "
-                        f"When user selects, call initialize_goal_session again with "
-                        f"review_period_id=<id> and review_period_name=<n>.",
-                        session,
-                    )
+                session["ReviewPeriodId"] = current["ReviewPeriodId"]
+                session["ReviewPeriodName"] = current["ReviewPeriodName"]
 
         # GoalPlanId
         if "GoalPlanId" not in session:
@@ -636,27 +618,17 @@ def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]
                 )
                 if not plans:
                     return "ERROR: No goal plans found for this employee.", session
-                if len(plans) == 1:
-                    session["GoalPlanId"] = plans[0]["GoalPlanId"]
-                    session["GoalPlanName"] = plans[0]["GoalPlanName"]
-                    return (
-                        f"GOAL_PLAN_SET:{plans[0]['GoalPlanName']}. "
-                        f"Tell the user the goal will be added to this goal plan. "
-                        f"Session fully initialized. Proceed with SMART goal creation.",
-                        session,
-                    )
-                else:
-                    opts = _json.dumps(
-                        [{"id": p["GoalPlanId"], "name": p["GoalPlanName"]} for p in plans]
-                    )
-                    return (
-                        f"MULTIPLE_GOAL_PLANS: Multiple goal plans found. "
-                        f"Present ONLY names to the user and ask which to use. "
-                        f"Plans: {opts} "
-                        f"When user selects, call initialize_goal_session again with "
-                        f"goal_plan_id=<id> and goal_plan_name=<name>.",
-                        session,
-                    )
+                opts = _json.dumps(
+                    [{"id": p["GoalPlanId"], "name": p["GoalPlanName"]} for p in plans]
+                )
+                return (
+                    f"MULTIPLE_GOAL_PLANS: Goal plans available for {session.get('ReviewPeriodName', 'this period')}. "
+                    f"Present ONLY names to the user and ask: 'Which goal plan would you like to use?' "
+                    f"Plans: {opts} "
+                    f"When user selects, call initialize_goal_session again with "
+                    f"goal_plan_id=<id> and goal_plan_name=<name>.",
+                    session,
+                )
 
         return "SESSION_READY: All IDs resolved. Proceed with SMART goal creation.", session
 
@@ -1198,6 +1170,26 @@ def _fetch_goal_plans_for_display(review_period_id: int | None = None) -> tuple[
 
 
 @tool
+def list_review_periods() -> str:
+    """List all available review periods for the employee.
+    Call this when the user wants to view goals and needs to select a review period,
+    or when the user directly asks what review periods are available.
+    Returns a numbered list of period names with raw data — present these to the user and ask which they want."""
+    return ""
+
+
+@tool
+def list_goal_plans(review_period_id: int) -> str:
+    """List all goal plans available for a given review period.
+    Call this after the user selects a review period (for viewing or updating goals),
+    or when the user directly asks what goal plans are available for a period.
+    review_period_id: the ReviewPeriodId selected by the user (or current period ID).
+    Returns a numbered list of plan names with raw data — present these to the user and ask which they want."""
+    _ = review_period_id
+    return ""
+
+
+@tool
 def get_goal_plans(review_period_id: int = 0) -> str:
     """Fetch and display the employee's assigned goal plans from Oracle HCM.
 
@@ -1238,6 +1230,7 @@ def sort_goals(
     overdue_only: bool = False,
     limit: int = 0,
     review_period_id: int = 0,
+    goal_plan_id: int = 0,
 ) -> str:
     """Display the employee's goals as a sorted, numbered markdown table.
     Must call fetch_goals first if goals have not been loaded this conversation.
@@ -1247,9 +1240,10 @@ def sort_goals(
     overdue_only: set true to show only overdue goals
     limit: maximum number of rows to return (0 = all rows). Use this for "top N" / "last N" queries.
     review_period_id: filter to only goals belonging to this ReviewPeriodId (0 = show all loaded goals)
+    goal_plan_id: filter to only goals belonging to this GoalPlanId (0 = no filter)
 
     Row numbers in the result are always 1, 2, 3... in the returned sorted order."""
-    _ = (sort_by, sort_order, overdue_only, limit, review_period_id)
+    _ = (sort_by, sort_order, overdue_only, limit, review_period_id, goal_plan_id)
     return ""
 
 
@@ -1281,7 +1275,10 @@ def initialize_goal_session(
     or goal plans to choose from.
 
     Pass the user-selected IDs (non-zero) when re-calling after the user makes a choice.
-    Never pass raw IDs to the user — show only names."""
+    Never pass raw IDs to the user — show only names.
+    If the user already selected a goal plan earlier in this conversation (e.g. during a
+    goal suggestion flow), pass goal_plan_id and goal_plan_name here to skip re-asking —
+    the session will use that plan directly without prompting the user again."""
     _ = (assignment_id, assignment_name, review_period_id, review_period_name, goal_plan_id, goal_plan_name)
     return ""
 
@@ -1407,6 +1404,13 @@ def custom_tools_node(state: State) -> dict:
                         g for g in raw_goals
                         if int(g.get("ReviewPeriodId", 0)) == rp_filter
                     ]
+                # Filter by goal_plan_id if requested
+                gp_filter = int(args.get("goal_plan_id", 0))
+                if gp_filter:
+                    filtered = [g for g in goals_to_sort if int(g.get("GoalPlanId", 0)) == gp_filter]
+                    if filtered:
+                        goals_to_sort = filtered
+                    # else: GoalPlanId not on goals — silently fall back to unfiltered list
                 sorted_goals = _sort_goals_data(
                     goals_to_sort,
                     sort_by=args.get("sort_by", "created"),
@@ -1465,6 +1469,61 @@ def custom_tools_node(state: State) -> dict:
                 ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
             )
             raw_goals = []
+
+        elif name == "list_review_periods":
+            try:
+                import json as _json
+                current, _ = _identify_current_and_previous_periods()
+                periods = _fetch_all_review_periods()
+                if not periods:
+                    content = "No active review periods found."
+                else:
+                    lines = []
+                    for i, p in enumerate(periods, 1):
+                        marker = " (current)" if current and p["ReviewPeriodId"] == current["ReviewPeriodId"] else ""
+                        lines.append(f"{i}. {p['ReviewPeriodName']}{marker}")
+                    content = (
+                        "Available review periods:\n" + "\n".join(lines) +
+                        "\n\nREVIEW_PERIODS_LISTED: Present these names to the user and ask: "
+                        "'For which review period would you like to view your goal plan?' "
+                        "Once user selects, call list_goal_plans(review_period_id=<id>). "
+                        f"\nPeriods data: {_json.dumps(periods)}"
+                    )
+            except Exception as e:
+                content = f"Could not load review periods: {e}"
+            tool_messages.append(
+                ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
+            )
+
+        elif name == "list_goal_plans":
+            review_period_id = int(args.get("review_period_id", 0))
+            if not review_period_id:
+                current, _ = _identify_current_and_previous_periods()
+                review_period_id = current["ReviewPeriodId"] if current else 0
+            if not review_period_id:
+                content = "ERROR: Could not determine current review period."
+            else:
+                try:
+                    import json as _json
+                    plans, period = _fetch_goal_plans_for_display(review_period_id=review_period_id)
+                    if not plans:
+                        content = "No goal plans found for this review period."
+                    else:
+                        period_name = period["ReviewPeriodName"] if period else f"period {review_period_id}"
+                        lines = [f"{i}. {p['GoalPlanName']}" for i, p in enumerate(plans, 1)]
+                        content = (
+                            f"Available goal plans for **{period_name}**:\n" + "\n".join(lines) +
+                            "\n\nGOAL_PLANS_LISTED: Present these names to the user and ask: "
+                            "'Which goal plan would you like?' "
+                            "Store the chosen GoalPlanId and GoalPlanName — pass goal_plan_id to sort_goals "
+                            "or use them when resuming initialize_goal_session. "
+                            f"\nPlans data: {_json.dumps(plans)}"
+                        )
+                except Exception as e:
+                    content = f"Could not load goal plans: {e}"
+            tool_messages.append(
+                ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
+            )
 
         elif name == "get_goal_plans":
             rp_id = int(args.get("review_period_id", 0)) or None
@@ -1564,7 +1623,7 @@ def get_graph():
     global _graph
     if _graph is None:
         llm = ChatAnthropic(model=MODEL, max_tokens=4096, temperature=0.2, api_key=os.environ["ANTHROPIC_API_KEY"])  # type: ignore[call-arg]
-        tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal, get_goal_plans, update_goal_progress, add_progress_note, get_progress_notes]
+        tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal, get_goal_plans, update_goal_progress, add_progress_note, get_progress_notes, list_review_periods, list_goal_plans]
         llm_with_tools = llm.bind_tools(tools)
 
         def assistant_node(state: State):
