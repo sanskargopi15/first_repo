@@ -1622,7 +1622,7 @@ _graph = None
 def get_graph():
     global _graph
     if _graph is None:
-        llm = ChatAnthropic(model=MODEL, max_tokens=4096, temperature=0.2, api_key=os.environ["ANTHROPIC_API_KEY"])  # type: ignore[call-arg]
+        llm = ChatAnthropic(model=MODEL, max_tokens=4096, temperature=0.3, api_key=os.environ["ANTHROPIC_API_KEY"])  # type: ignore[call-arg]
         tools = [fetch_goals, sort_goals, save_goal, initialize_goal_session, update_goal, get_goal_plans, update_goal_progress, add_progress_note, get_progress_notes, list_review_periods, list_goal_plans]
         llm_with_tools = llm.bind_tools(tools)
 
