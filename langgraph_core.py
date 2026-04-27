@@ -678,54 +678,39 @@ def post_goal_to_oracle(goal: dict, session: dict | None = None) -> str:
     return f"Goal saved successfully: {resp.json().get('GoalName')}"
 
 
-# def patch_goal_to_oracle(self_href: str, goal: dict) -> str:
-#     """PATCH an existing goal via its self href. Returns success string or raises."""
-#     # Fetch current ETag first — Oracle requires If-Match for PATCH
-#     get_resp = requests.get(self_href, auth=ORACLE_WRITE_AUTH, timeout=15)
-#     get_resp.raise_for_status()
-#     etag = get_resp.headers.get("ETag", "")
+def patch_goal_to_oracle(self_href: str, goal: dict) -> str:
+    """PATCH an existing goal via its self href. Returns success string or raises."""
+    # Fetch current ETag first — Oracle requires If-Match for PATCH
+    get_resp = requests.get(self_href, auth=ORACLE_WRITE_AUTH, timeout=15)
+    get_resp.raise_for_status()
+    etag = get_resp.headers.get("ETag", "")
 
-#     # Log what Oracle currently stores so we can confirm field names
-#     get_data = get_resp.json()
-#     print(f"[PATCH pre-GET] StatusCode={get_data.get('StatusCode')!r}  Status={get_data.get('Status')!r}  all_keys={list(get_data.keys())}")
+    # Log what Oracle currently stores so we can confirm field names
+    get_data = get_resp.json()
+    print(f"[PATCH pre-GET] StatusCode={get_data.get('StatusCode')!r}  Status={get_data.get('Status')!r}  all_keys={list(get_data.keys())}")
 
-#     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
-#     payload = {
-#         "GoalName": goal["GoalName"],
-#         "Description": goal["Description"],
-#         "StartDate": _to_oracle_date(goal["StartDate"]),
-#         "TargetCompletionDate": _to_oracle_date(goal["TargetCompletionDate"]),
-#         "StatusCode": status_val,
-#     }
-#     print(f"[PATCH sending] payload StatusCode={status_val!r}")
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Accept": "application/json",
-#         "REST-Framework-Version": "4",
-#     }
-#     if etag:
-#         headers["If-Match"] = etag
-
-#     resp = requests.patch(self_href, json=payload, auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
-#     resp.raise_for_status()
-#     resp_data = resp.json()
-#     print(f"[PATCH response] StatusCode={resp_data.get('StatusCode')!r}  Status={resp_data.get('Status')!r}")
-#     return f"Goal updated successfully: {resp_data.get('GoalName')}"
-
-def patch_goal_to_oracle(goal_id: int, goal_plan_goal_id: int, goal: dict) -> str:
-    """Update via Oracle batch POST — PATCH gave 500 with StatusCode."""
-    BATCH_URL = f"{ORACLE_BASE_URL}/hcmRestApi/rest/rv:cbceab95-3fe1-4e78-b21a-57457d97374f/en/11.13.18.05:9/"
     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
-    payload = {"parts": [{"id": f"performanceGoals{goal_id}", "operation": "update",
-        "path": f"/performanceGoalsV2/{goal_id}",
-        "payload": {"GoalName": goal.get("GoalName",""), "Description": goal.get("Description",""),
-            "StartDate": _to_oracle_date(goal.get("StartDate","")),
-            "TargetCompletionDate": _to_oracle_date(goal.get("TargetCompletionDate","")),
-            "StatusCode": status_val, "RequiredGPGId": str(goal_plan_goal_id)}}]}
-    headers = {"Content-Type": "application/vnd.oracle.adf.batch+json", "REST-Framework-Version": "4"}
-    resp = requests.post(BATCH_URL, json=payload, auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
+    payload = {
+        "GoalName": goal["GoalName"],
+        "Description": goal["Description"],
+        "StartDate": _to_oracle_date(goal["StartDate"]),
+        "TargetCompletionDate": _to_oracle_date(goal["TargetCompletionDate"]),
+        "StatusCode": status_val,
+    }
+    print(f"[PATCH sending] payload StatusCode={status_val!r}")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "REST-Framework-Version": "4",
+    }
+    if etag:
+        headers["If-Match"] = etag
+
+    resp = requests.patch(self_href, json=payload, auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
     resp.raise_for_status()
-    return f"Goal updated successfully: {goal.get('GoalName','Goal')}"
+    resp_data = resp.json()
+    print(f"[PATCH response] StatusCode={resp_data.get('StatusCode')!r}  Status={resp_data.get('Status')!r}")
+    return f"Goal updated successfully: {resp_data.get('GoalName')}"
 
 
 # --- Internal implementations (called by custom_tools_node) ---
@@ -985,24 +970,11 @@ def _update_goal_impl(
         "GoalId": goal_id,
     }
 
-    # Fetch GoalPlanGoalId for batch POST RequiredGPGId
-    try:
-        sg = requests.get(f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
-            f"?q=PersonNumber={ORACLE_PERSON_NUMBER};GoalId={goal_id}&limit=1",
-            auth=ORACLE_AUTH, timeout=10)
-        sg.raise_for_status()
-        items = sg.json().get("items", [])
-        if items:
-            match["GoalPlanGoalId"] = items[0].get("GoalPlanGoalId", 0)
-    except Exception:
-        pass
-
     decision = interrupt(goal_data)
 
     if decision.get("action") == "update":
         final_data = decision.get("goal_data", goal_data)
-        gpg_id = int(match.get("GoalPlanGoalId") or 0)
-        return patch_goal_to_oracle(goal_id, gpg_id, final_data)
+        return patch_goal_to_oracle(final_data.get("SelfHref", self_href), final_data)
     elif decision.get("action") == "silent_cancel":
         return "SILENT_CANCEL"
     return "CANCELLED: The user dismissed the update form."
