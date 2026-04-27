@@ -15,6 +15,7 @@ interface ChatAreaProps {
   messages: Message[]
   interrupt: GoalData | null
   threadId: string
+  personNumber: string
   loading: boolean
   onMessagesUpdate: (messages: Message[], interrupt: GoalData | null) => void
 }
@@ -24,6 +25,7 @@ export default function ChatArea({
   messages,
   interrupt,
   threadId,
+  personNumber,
   loading,
   onMessagesUpdate,
 }: ChatAreaProps) {
@@ -97,7 +99,7 @@ export default function ChatArea({
     setSending(true)
     inputRef.current?.focus()
     try {
-      const resp = await sendMessage(threadId, msg)
+      const resp = await sendMessage(threadId, personNumber, msg)
       setOptimisticMsg(null)
       onMessagesUpdate(resp.messages, resp.interrupt)
     } catch {
@@ -146,11 +148,21 @@ export default function ChatArea({
                 ...(lockedInterrupt ? [{ goal: lockedInterrupt, afterIndex: lockedMessageCount }] : []),
               ]
 
+              const handleListItemClick = (text: string) => {
+                handleSend(text)
+              }
+
               if (allInterrupts.length === 0) {
                 // No interrupts at all — render all messages + optimistic
                 return (
                   <>
-                    {messages.map((msg, i) => <MessageBubble key={msg.id ?? i} message={msg} />)}
+                    {messages.map((msg, i) => (
+                      <MessageBubble
+                        key={msg.id ?? i}
+                        message={msg}
+                        onClickItem={msg.role === 'assistant' ? handleListItemClick : undefined}
+                      />
+                    ))}
                     {optimisticMsg && (
                       <MessageBubble key="optimistic" message={{ id: 'optimistic', role: 'user', content: optimisticMsg }} />
                     )}
@@ -168,7 +180,13 @@ export default function ChatArea({
 
                 // Messages before this interrupt
                 messages.slice(cursor, afterIndex).forEach((msg, i) => {
-                  segments.push(<MessageBubble key={msg.id ?? (cursor + i)} message={msg} />)
+                  segments.push(
+                    <MessageBubble
+                      key={msg.id ?? (cursor + i)}
+                      message={msg}
+                      onClickItem={msg.role === 'assistant' ? handleListItemClick : undefined}
+                    />
+                  )
                 })
                 cursor = afterIndex
 
@@ -179,6 +197,7 @@ export default function ChatArea({
                       key={`interrupt-${idx}`}
                       interrupt={goal}
                       threadId={threadId}
+                      personNumber={personNumber}
                       showActions={showActions}
                       onEdit={(sc) => { setEditStatusCode(sc); setShowEditForm(true); setShowActions(false) }}
                       onComplete={(msgs, newInterrupt) => { setShowActions(false); onMessagesUpdate(msgs, newInterrupt) }}
@@ -190,6 +209,7 @@ export default function ChatArea({
                       key={`update-form-${idx}`}
                       interrupt={editStatusCode ? { ...goal, StatusCode: editStatusCode } : goal}
                       threadId={threadId}
+                      personNumber={personNumber}
                       onComplete={(msgs, newInterrupt) => onMessagesUpdate(msgs, newInterrupt)}
                     />
                   )
@@ -199,6 +219,7 @@ export default function ChatArea({
                       key={`form-${idx}`}
                       interrupt={editStatusCode ? { ...goal, StatusCode: editStatusCode } : goal}
                       threadId={threadId}
+                      personNumber={personNumber}
                       onComplete={(msgs, newInterrupt) => onMessagesUpdate(msgs, newInterrupt)}
                     />
                   )
@@ -209,6 +230,7 @@ export default function ChatArea({
                       key={`interrupt-${idx}`}
                       interrupt={goal}
                       threadId={threadId}
+                      personNumber={personNumber}
                       showActions={false}
                       onEdit={(_sc) => {}}
                       onComplete={() => {}}
@@ -219,7 +241,13 @@ export default function ChatArea({
 
               // Remaining messages after the last interrupt card
               messages.slice(cursor).forEach((msg, i) => {
-                segments.push(<MessageBubble key={msg.id ?? (cursor + i)} message={msg} />)
+                segments.push(
+                  <MessageBubble
+                    key={msg.id ?? (cursor + i)}
+                    message={msg}
+                    onClickItem={msg.role === 'assistant' ? handleListItemClick : undefined}
+                  />
+                )
               })
 
               // Optimistic message
@@ -263,7 +291,7 @@ export default function ChatArea({
       </div>
 
       {/* Fixed chat input */}
-      <div className="shrink-0 px-6 pb-5 pt-3" style={{ borderTop: '1px solid #ece6d9', background: '#fbf8f1' }}>
+      <div className="shrink-0 px-6 pb-5 pt-3" style={{ borderTop: '1px solid #ece6d9', background: '#F3F3F0' }}>
         <div className={`flex items-end gap-3 bg-white rounded-2xl border shadow-sm transition-all ${
           isInputDisabled ? 'border-gray-100 opacity-70' : 'border-gray-200 focus-within:border-navy/30 focus-within:ring-2 focus-within:ring-navy/10'
         }`}>

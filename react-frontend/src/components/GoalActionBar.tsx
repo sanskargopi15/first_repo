@@ -8,6 +8,7 @@ import type { GoalData, Message } from '../types'
 interface GoalActionBarProps {
   interrupt: GoalData
   threadId: string
+  personNumber: string
   showActions?: boolean
   onEdit: (statusCode: string) => void
   onComplete: (messages: Message[], newInterrupt: GoalData | null) => void
@@ -23,6 +24,7 @@ const STATUS_OPTIONS = [
 export default function GoalActionBar({
   interrupt,
   threadId,
+  personNumber,
   showActions = true,
   onEdit,
   onComplete,
@@ -35,7 +37,7 @@ export default function GoalActionBar({
     setLoading('submit')
     setError(null)
     try {
-      const resp = await resumeGraph(threadId, 'save', { ...interrupt, StatusCode: statusCode })
+      const resp = await resumeGraph(threadId, personNumber, 'save', { ...interrupt, StatusCode: statusCode })
       toast.success('Goal submitted to Oracle HCM!')
       onComplete(resp.messages, resp.interrupt)
     } catch (err) {
@@ -49,7 +51,7 @@ export default function GoalActionBar({
     setLoading('update')
     setError(null)
     try {
-      const resp = await updateGoal(threadId, { ...interrupt, StatusCode: statusCode })
+      const resp = await updateGoal(threadId, personNumber, { ...interrupt, StatusCode: statusCode })
       toast.success('Goal updated in Oracle HCM!')
       onComplete(resp.messages, resp.interrupt)
     } catch (err) {
@@ -143,7 +145,7 @@ export default function GoalActionBar({
               background: showActions ? '#fff' : '#fafaf9',
               cursor: showActions ? 'pointer' : 'default',
             }}
-            onFocus={e => { if (showActions) { e.target.style.borderColor = '#b8443a'; e.target.style.boxShadow = '0 0 0 2px rgba(184,68,58,.08)' } }}
+            onFocus={e => { if (showActions) { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' } }}
             onBlur={e => { e.target.style.borderColor = '#ece6d9'; e.target.style.boxShadow = 'none' }}
           >
             {STATUS_OPTIONS.map(opt => (

@@ -1,3 +1,4 @@
+import React from 'react'
 import { motion } from 'framer-motion'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -10,7 +11,13 @@ function formatTime(ts?: string): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function MessageBubble({ message }: { message: Message }) {
+export default function MessageBubble({
+  message,
+  onClickItem,
+}: {
+  message: Message
+  onClickItem?: (text: string) => void
+}) {
   const isUser = message.role === 'user'
   const timeStr = formatTime(message.timestamp)
 
@@ -53,12 +60,46 @@ export default function MessageBubble({ message }: { message: Message }) {
                 ol: ({ children }) => (
                   <ol style={{ margin: '4px 0', paddingLeft: 16 }}>{children}</ol>
                 ),
-                li: ({ children }) => (
-                  <li style={{ display: 'flex', gap: 8, margin: '3px 0' }}>
-                    <span style={{ color: '#b8443a', flexShrink: 0, marginTop: 1 }}>•</span>
-                    <span>{children}</span>
-                  </li>
-                ),
+                li: ({ node, children }: { node?: any; children?: React.ReactNode }) => {
+                  const hasContent = (node as any)?.children?.some(
+                    (c: any) =>
+                      (c.type === 'text' && c.value?.trim()) ||
+                      (c.type === 'element' && c.tagName !== 'ul' && c.tagName !== 'ol')
+                  )
+                  if (!hasContent) return <>{children}</>
+                  const clickable = !!onClickItem
+                  const extractText = (n: any): string => {
+                    if (!n) return ''
+                    if (n.type === 'text') return n.value ?? ''
+                    if (n.children) return n.children.map(extractText).join('')
+                    return ''
+                  }
+                  const handleClick = clickable
+                    ? () => {
+                        const text = extractText(node).trim()
+                        if (text) onClickItem(text)
+                      }
+                    : undefined
+                  return (
+                    <li
+                      onClick={handleClick}
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        margin: '3px 0',
+                        cursor: clickable ? 'pointer' : 'default',
+                        borderRadius: 6,
+                        padding: clickable ? '2px 4px' : undefined,
+                        transition: 'background 0.15s',
+                      }}
+                      onMouseEnter={clickable ? e => { (e.currentTarget as HTMLLIElement).style.background = '#e8ede8' } : undefined}
+                      onMouseLeave={clickable ? e => { (e.currentTarget as HTMLLIElement).style.background = '' } : undefined}
+                    >
+                      <span style={{ color: '#2b3e2b', flexShrink: 0, marginTop: 1 }}>•</span>
+                      <span>{children}</span>
+                    </li>
+                  )
+                },
                 table: ({ children }) => (
                   <div style={{ overflowX: 'auto', margin: '8px 0' }}>
                     <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
@@ -67,7 +108,7 @@ export default function MessageBubble({ message }: { message: Message }) {
                   </div>
                 ),
                 th: ({ children }) => (
-                  <th style={{ border: '1px solid #eae6dd', padding: '4px 8px', background: '#f5e6e3', color: '#2a2f3d', fontWeight: 600, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  <th style={{ border: '1px solid #eae6dd', padding: '4px 8px', background: '#e8ede8', color: '#2a2f3d', fontWeight: 600, textAlign: 'left', whiteSpace: 'nowrap' }}>
                     {children}
                   </th>
                 ),

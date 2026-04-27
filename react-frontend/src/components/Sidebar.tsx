@@ -1,8 +1,10 @@
-import { ClipboardList, Plus, Target, Search, Calendar, Lightbulb, X, Clock } from 'lucide-react'
+import { ClipboardList, Plus, Target, Search, Calendar, Lightbulb, X, Clock, LogOut } from 'lucide-react'
 
 interface SidebarProps {
   workerName: string
+  workerDesignation?: string
   onNewChat: () => void
+  onSignOut: () => void
   isOpen?: boolean
   onClose?: () => void
 }
@@ -14,7 +16,9 @@ function getInitials(name: string): string {
 
 export default function Sidebar({
   workerName,
+  workerDesignation = '',
   onNewChat,
+  onSignOut,
   isOpen = false,
   onClose,
 }: SidebarProps) {
@@ -43,7 +47,7 @@ export default function Sidebar({
         <div className="flex items-center gap-3 px-5 py-5 border-b border-warm-border">
           <div
             className="w-9 h-9 rounded-xl flex items-center justify-center text-white shrink-0"
-            style={{ background: '#b8443a', boxShadow: '0 4px 10px -3px rgba(184,68,58,.4)' }}
+            style={{ background: '#2b3e2b', boxShadow: '0 4px 10px -3px rgba(43,62,43,.4)' }}
           >
             <ClipboardList size={18} />
           </div>
@@ -67,13 +71,13 @@ export default function Sidebar({
           <div className="flex items-center gap-3">
             <div
               className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
-              style={{ background: '#fff', color: '#b8443a', border: '2px solid #b8443a' }}
+              style={{ background: '#fff', color: '#2b3e2b', border: '2px solid #2b3e2b' }}
             >
               {initials}
             </div>
             <div className="min-w-0">
               <p className="font-semibold text-sm text-warm-ink truncate">{displayName}</p>
-              <p className="text-xs text-warm-ink3">Employee</p>
+              <p className="text-xs text-warm-ink3 truncate">{workerDesignation || 'Employee'}</p>
             </div>
           </div>
         </div>
@@ -83,7 +87,7 @@ export default function Sidebar({
           <button
             onClick={onNewChat}
             className="w-full flex items-center justify-center gap-2 text-white font-semibold text-sm py-2.5 px-4 rounded-xl transition-all duration-150 hover:brightness-110"
-            style={{ background: '#b8443a', boxShadow: '0 4px 10px -3px rgba(184,68,58,.35)' }}
+            style={{ background: '#2b3e2b', boxShadow: '0 4px 10px -3px rgba(43,62,43,.35)' }}
           >
             <Plus size={16} />
             New Chat
@@ -94,7 +98,7 @@ export default function Sidebar({
         <div className="mx-4 my-3 border-t border-warm-border" />
 
         {/* Capabilities */}
-        <div className="px-4 flex-1">
+        <div className="px-4 flex-1 overflow-y-auto">
           <p className="text-[10px] font-bold uppercase tracking-widest mb-2 text-warm-ink3">What I can do</p>
           <ul className="space-y-2">
             {[
@@ -105,11 +109,23 @@ export default function Sidebar({
               { icon: <Clock size={13} />,     text: 'Track due dates' },
             ].map(({ icon, text }) => (
               <li key={text} className="flex items-center gap-2 text-xs text-warm-ink2">
-                <span style={{ color: '#b8443a' }}>{icon}</span>
+                <span style={{ color: '#2b3e2b' }}>{icon}</span>
                 {text}
               </li>
             ))}
           </ul>
+        </div>
+
+        {/* Sign out */}
+        <div className="px-4 pb-5 pt-3 border-t border-warm-border mt-auto">
+          <button
+            onClick={onSignOut}
+            className="w-full flex items-center gap-2 text-xs font-semibold py-2 px-3 rounded-xl transition-colors hover:bg-warm-border"
+            style={{ color: '#5d6478' }}
+          >
+            <LogOut size={14} />
+            Sign out
+          </button>
         </div>
       </aside>
     </>

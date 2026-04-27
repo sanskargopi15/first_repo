@@ -1,10 +1,14 @@
 import os
 import uuid
+import logging
 import requests
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -17,7 +21,6 @@ from langgraph_core import (
     get_messages as _get_messages,
     get_text,
     ORACLE_BASE_URL,
-    ORACLE_PERSON_NUMBER,
     ORACLE_AUTH,
 )
 
@@ -36,11 +39,13 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     thread_id: str
     message: str
+    person_number: str
 
 
 class ResumeRequest(BaseModel):
     thread_id: str
     action: str
+    person_number: str
     goal_data: Optional[dict] = None
 
 
@@ -99,19 +104,31 @@ def build_response(thread_id: str) -> dict:
 
 # --- Endpoints ---
 @app.get("/api/worker")
-async def get_worker():
+async def get_worker(person_number: str = Query(...)):
+    logger.info("get_worker called with person_number=%r", person_number)
     try:
         url = (
-            f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
-            f"?q=PersonNumber={ORACLE_PERSON_NUMBER}&orderBy=GoalId:desc&limit=1"
+            f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/publicWorkers"
+            f"?q=PersonNumber={person_number}&expand=all"
         )
         resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
         resp.raise_for_status()
         items = resp.json().get("items", [])
-        name = items[0].get("WorkerName", "there") if items else "there"
-        return {"name": name}
-    except Exception:
-        return {"name": "there"}
+        logger.info("publicWorkers returned %d items for person_number=%r", len(items), person_number)
+        if items:
+            item = items[0]
+            name = item.get("DisplayName", "there")
+            assignments = item.get("assignments", [])
+            primary = next((a for a in assignments if a.get("PrimaryFlag")), assignments[0] if assignments else {})
+            designation = primary.get("JobName", "")
+        else:
+            name = "there"
+            designation = ""
+        logger.info("resolved worker name: %r, designation: %r", name, designation)
+        return {"name": name, "designation": designation}
+    except Exception as e:
+        logger.error("get_worker error for person_number=%r: %s", person_number, e)
+        return {"name": "there", "designation": ""}
 
 
 @app.post("/api/thread/new")
@@ -126,6 +143,7 @@ async def get_thread_messages(thread_id: str):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
+    logger.info("chat: thread=%s person_number=%r message=%r", req.thread_id[:8], req.person_number, req.message[:60])
     graph = get_graph()
     config = {"configurable": {"thread_id": req.thread_id}}
     try:
@@ -134,7 +152,9 @@ async def chat(req: ChatRequest):
         if get_interrupt_data(req.thread_id):
             graph.invoke(Command(resume={"action": "silent_cancel"}), config)
         graph.invoke(
-            {"messages": [HumanMessage(content=req.message)]},
+            # person_number is included so MemorySaver persists it in state for
+            # all subsequent tool calls on this thread.
+            {"messages": [HumanMessage(content=req.message)], "person_number": req.person_number},
             config,
         )
     except Exception as e:
@@ -154,5 +174,3 @@ async def resume(req: ResumeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return build_response(req.thread_id)
-
-

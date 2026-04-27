@@ -11,11 +11,11 @@
   --ga-navy:         #1a2744;
   --ga-navy-light:   #243358;
   --ga-navy-dark:    #0f1a30;
-  --ga-accent:       #b8443a;   /* warm terracotta — design handoff canonical */
-  --ga-accent-hover: #c0392b;
+  --ga-accent:       #2b3e2b;   /* SITA green */
+  --ga-accent-hover: #233423;
 
   /* Canvas / surface */
-  --ga-canvas:        #f0f4f8;
+  --ga-canvas:        #F3F3F0;
   --ga-surface:       #ffffff;
   --ga-surface-muted: #f8fafc;
   --ga-hairline:      #f1f5f9;
@@ -23,10 +23,10 @@
   --ga-border-strong: #cbd5e1;
 
   /* Warm sidebar palette */
-  --ga-warm-surface:  #fbf8f1;
+  --ga-warm-surface:  #F3F3F0;
   --ga-warm-border:   #ece6d9;
   --ga-warm-hover:    #f1ebdd;
-  --ga-warm-soft:     #f5e6e3;
+  --ga-warm-soft:     #e8ede8;
   --ga-warm-ink:      #2a2f3d;
   --ga-warm-ink2:     #5d6478;
   --ga-warm-ink3:     #8b91a4;

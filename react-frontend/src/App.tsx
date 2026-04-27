@@ -4,22 +4,50 @@ import toast from 'react-hot-toast'
 import { Menu } from 'lucide-react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
+import LoginPage from './components/LoginPage'
 import { newThread, getWorker, getMessages } from './api/client'
 import type { Message, GoalData } from './types'
 
 const THREAD_KEY = 'goal_assistant_thread_id'
+const PERSON_KEY = 'goal_assistant_person_number'
 
 export default function App() {
+  const [personNumber, setPersonNumber] = useState<string>(() => localStorage.getItem(PERSON_KEY) ?? '')
   const [threadId, setThreadId]     = useState<string>('')
   const [workerName, setWorkerName] = useState<string>('')
+  const [workerDesignation, setWorkerDesignation] = useState<string>('')
   const [messages, setMessages]     = useState<Message[]>([])
   const [interrupt, setInterrupt]   = useState<GoalData | null>(null)
   const [loading, setLoading]       = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // ─── Login handler ────────────────────────────────────────────────────────
+
+  function handleLogin(pn: string) {
+    localStorage.setItem(PERSON_KEY, pn)
+    // Clear any stale thread from a previous user session
+    localStorage.removeItem(THREAD_KEY)
+    setPersonNumber(pn)
+  }
+
+  function handleSignOut() {
+    localStorage.removeItem(PERSON_KEY)
+    localStorage.removeItem(THREAD_KEY)
+    setPersonNumber('')
+    setThreadId('')
+    setWorkerName('')
+    setWorkerDesignation('')
+    setMessages([])
+    setInterrupt(null)
+  }
+
   // ─── Init ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (!personNumber) {
+      setLoading(false)
+      return
+    }
     async function init() {
       setLoading(true)
       try {
@@ -39,8 +67,9 @@ export default function App() {
         }
         setThreadId(tid)
 
-        const name = await getWorker()
-        setWorkerName(name)
+        const worker = await getWorker(personNumber)
+        setWorkerName(worker.name)
+        setWorkerDesignation(worker.designation)
 
         setMessages(resp.messages)
         setInterrupt(resp.interrupt)
@@ -51,7 +80,7 @@ export default function App() {
       }
     }
     init()
-  }, [])
+  }, [personNumber])
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
@@ -75,24 +104,30 @@ export default function App() {
     } catch {
       toast.error('Failed to create new chat.')
     }
-  }, [])
+  }, [personNumber])
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
+  if (!personNumber) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#fbf8f1' }}>
+    <div className="flex h-screen overflow-hidden" style={{ background: '#F3F3F0' }}>
       <Toaster
         position="top-right"
         toastOptions={{
           style: { borderRadius: '12px', fontSize: '13px', fontFamily: 'Inter, sans-serif' },
           success: { style: { background: '#1a2744', color: '#fff' } },
-          error:   { style: { background: '#b8443a', color: '#fff' } },
+          error:   { style: { background: '#2b3e2b', color: '#fff' } },
         }}
       />
 
       <Sidebar
         workerName={workerName}
+        workerDesignation={workerDesignation}
         onNewChat={handleNewChat}
+        onSignOut={handleSignOut}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -128,6 +163,7 @@ export default function App() {
                 messages={messages}
                 interrupt={interrupt}
                 threadId={threadId}
+                personNumber={personNumber}
                 loading={false}
                 onMessagesUpdate={handleMessagesUpdate}
               />

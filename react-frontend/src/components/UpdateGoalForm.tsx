@@ -9,10 +9,11 @@ import type { GoalData, Message } from '../types'
 interface UpdateGoalFormProps {
   interrupt: GoalData
   threadId: string
+  personNumber: string
   onComplete: (messages: Message[], newInterrupt: GoalData | null) => void
 }
 
-export default function UpdateGoalForm({ interrupt, threadId, onComplete }: UpdateGoalFormProps) {
+export default function UpdateGoalForm({ interrupt, threadId, personNumber, onComplete }: UpdateGoalFormProps) {
   const todayStr = format(new Date(), 'yyyy-MM-dd')
   const defaultEnd = format(addDays(new Date(), 30), 'yyyy-MM-dd')
 
@@ -33,7 +34,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
     setUpdating(true)
     setError(null)
     try {
-      const resp = await updateGoal(threadId, {
+      const resp = await updateGoal(threadId, personNumber, {
         ...interrupt,
         GoalName: goalName,
         Description: description,
@@ -55,7 +56,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
     setCancelling(true)
     try {
       const { resumeGraph } = await import('../api/client')
-      const resp = await resumeGraph(threadId, 'cancel')
+      const resp = await resumeGraph(threadId, personNumber, 'cancel')
       onComplete(resp.messages, resp.interrupt)
     } catch {
       toast.error('Something went wrong.')
@@ -75,7 +76,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
         <div className="p-5 space-y-4">
           {/* Header */}
           <div className="flex items-center justify-between mb-1">
-            <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#b8443a' }}>
+            <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#2b3e2b' }}>
               Update Goal
             </p>
           </div>
@@ -83,7 +84,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
           {/* Goal Name */}
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#5d6478' }}>
-              Goal Name <span style={{ color: '#b8443a' }}>*</span>
+              Goal Name <span style={{ color: '#2b3e2b' }}>*</span>
             </label>
             <input
               type="text"
@@ -91,7 +92,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
               onChange={e => setGoalName(e.target.value)}
               className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition"
               style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff' }}
-              onFocus={e => { e.target.style.borderColor = '#b8443a'; e.target.style.boxShadow = '0 0 0 2px rgba(184,68,58,.08)' }}
+              onFocus={e => { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' }}
               onBlur={e => { e.target.style.borderColor = '#ece6d9'; e.target.style.boxShadow = 'none' }}
               placeholder="Enter goal name"
             />
@@ -100,7 +101,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
           {/* Description */}
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#5d6478' }}>
-              Description <span style={{ color: '#b8443a' }}>*</span>
+              Description <span style={{ color: '#2b3e2b' }}>*</span>
               <span style={{ color: '#8b91a4', fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}> — one bullet per line starting with -</span>
             </label>
             <textarea
@@ -113,7 +114,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
               ref={el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }}
               className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition resize-none leading-relaxed"
               style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff', minHeight: '96px', overflow: 'hidden' }}
-              onFocus={e => { e.target.style.borderColor = '#b8443a'; e.target.style.boxShadow = '0 0 0 2px rgba(184,68,58,.08)' }}
+              onFocus={e => { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' }}
               onBlur={e => { e.target.style.borderColor = '#ece6d9'; e.target.style.boxShadow = 'none' }}
               placeholder="Describe the goal"
             />
@@ -124,7 +125,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#5d6478' }}>
-                Start Date <span style={{ color: '#b8443a' }}>*</span>
+                Start Date <span style={{ color: '#2b3e2b' }}>*</span>
               </label>
               <input
                 type="date"
@@ -132,13 +133,13 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
                 onChange={e => setStartDate(e.target.value)}
                 className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition"
                 style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff' }}
-                onFocus={e => { e.target.style.borderColor = '#b8443a' }}
+                onFocus={e => { e.target.style.borderColor = '#2b3e2b' }}
                 onBlur={e => { e.target.style.borderColor = '#ece6d9' }}
               />
             </div>
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#5d6478' }}>
-                Target Completion <span style={{ color: '#b8443a' }}>*</span>
+                Target Completion <span style={{ color: '#2b3e2b' }}>*</span>
               </label>
               <input
                 type="date"
@@ -146,7 +147,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
                 onChange={e => setEndDate(e.target.value)}
                 className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition"
                 style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff' }}
-                onFocus={e => { e.target.style.borderColor = '#b8443a' }}
+                onFocus={e => { e.target.style.borderColor = '#2b3e2b' }}
                 onBlur={e => { e.target.style.borderColor = '#ece6d9' }}
               />
             </div>
@@ -162,7 +163,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
               onChange={e => setStatusCode(e.target.value)}
               className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition appearance-none"
               style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff', cursor: 'pointer' }}
-              onFocus={e => { e.target.style.borderColor = '#b8443a'; e.target.style.boxShadow = '0 0 0 2px rgba(184,68,58,.08)' }}
+              onFocus={e => { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' }}
               onBlur={e => { e.target.style.borderColor = '#ece6d9'; e.target.style.boxShadow = 'none' }}
             >
               <option value="NOT_STARTED">Not Started</option>
@@ -187,7 +188,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
                 onClick={() => { if (isValid) { setConfirmUpdate(true) } else { toast.error('Please fill in all required fields.') } }}
                 disabled={updating || cancelling || !isValid}
                 className="flex items-center gap-1.5 text-xs font-bold text-white px-4 py-2 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:brightness-110"
-                style={{ background: '#b8443a', boxShadow: '0 4px 10px -3px rgba(184,68,58,.35)' }}
+                style={{ background: '#2b3e2b', boxShadow: '0 4px 10px -3px rgba(43,62,43,.35)' }}
               >
                 <CheckCircle size={13} /> Update
               </button>
@@ -198,7 +199,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
                   onClick={handleUpdate}
                   disabled={updating}
                   className="flex items-center gap-1 text-white text-xs font-bold px-3 py-1.5 rounded-lg hover:brightness-110 transition disabled:opacity-50"
-                  style={{ background: '#b8443a' }}
+                  style={{ background: '#2b3e2b' }}
                 >
                   {updating ? <Loader2 size={12} className="animate-spin" /> : null}
                   Yes
@@ -206,7 +207,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
                 <button
                   onClick={() => setConfirmUpdate(false)}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg transition"
-                  style={{ background: '#fbf8f1', color: '#5d6478', border: '1px solid #ece6d9' }}
+                  style={{ background: '#F3F3F0', color: '#5d6478', border: '1px solid #ece6d9' }}
                 >
                   No
                 </button>
@@ -217,7 +218,7 @@ export default function UpdateGoalForm({ interrupt, threadId, onComplete }: Upda
               onClick={handleCancel}
               disabled={updating || cancelling}
               className="flex items-center gap-1.5 text-xs font-medium px-4 py-2 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ background: '#fbf8f1', color: '#5d6478', border: '1px solid #ece6d9' }}
+              style={{ background: '#F3F3F0', color: '#5d6478', border: '1px solid #ece6d9' }}
             >
               {cancelling ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
               Cancel

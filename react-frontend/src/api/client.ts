@@ -21,11 +21,16 @@ export async function newThread(): Promise<string> {
   return (await r.json()).thread_id
 }
 
-export async function getWorker(): Promise<string> {
-  const r = await fetch(`${BASE}/api/worker`)
+export interface WorkerInfo {
+  name: string
+  designation: string
+}
+
+export async function getWorker(personNumber: string): Promise<WorkerInfo> {
+  const r = await fetch(`${BASE}/api/worker?person_number=${encodeURIComponent(personNumber)}`)
   await checkOk(r)
   const data = await r.json()
-  return data.name || ''
+  return { name: data.name || '', designation: data.designation || '' }
 }
 
 export async function getMessages(threadId: string): Promise<ChatResponse> {
@@ -34,11 +39,11 @@ export async function getMessages(threadId: string): Promise<ChatResponse> {
   return r.json()
 }
 
-export async function sendMessage(threadId: string, message: string): Promise<ChatResponse> {
+export async function sendMessage(threadId: string, personNumber: string, message: string): Promise<ChatResponse> {
   const r = await fetch(`${BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thread_id: threadId, message }),
+    body: JSON.stringify({ thread_id: threadId, person_number: personNumber, message }),
   })
   await checkOk(r)
   return r.json()
@@ -46,13 +51,14 @@ export async function sendMessage(threadId: string, message: string): Promise<Ch
 
 export async function resumeGraph(
   threadId: string,
+  personNumber: string,
   action: string,
   goalData?: GoalData
 ): Promise<ChatResponse> {
   const r = await fetch(`${BASE}/api/resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thread_id: threadId, action, goal_data: goalData }),
+    body: JSON.stringify({ thread_id: threadId, person_number: personNumber, action, goal_data: goalData }),
   })
   await checkOk(r)
   return r.json()
@@ -60,12 +66,13 @@ export async function resumeGraph(
 
 export async function updateGoal(
   threadId: string,
+  personNumber: string,
   goalData: GoalData
 ): Promise<ChatResponse> {
   const r = await fetch(`${BASE}/api/resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thread_id: threadId, action: 'update', goal_data: goalData }),
+    body: JSON.stringify({ thread_id: threadId, person_number: personNumber, action: 'update', goal_data: goalData }),
   })
   await checkOk(r)
   return r.json()

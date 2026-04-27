@@ -25,9 +25,9 @@ function ActionButton({ icon, label, onClick }: { icon: ReactNode; label: string
       style={{ border: '1px solid #ece6d9', color: '#5d6478' }}
       onMouseEnter={e => {
         const el = e.currentTarget as HTMLElement
-        el.style.background = '#b8443a'
+        el.style.background = '#2b3e2b'
         el.style.color = '#fff'
-        el.style.borderColor = '#b8443a'
+        el.style.borderColor = '#2b3e2b'
       }}
       onMouseLeave={e => {
         const el = e.currentTarget as HTMLElement
