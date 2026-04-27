@@ -1,4 +1,4 @@
-import { ClipboardList, Plus, Target, Search, Calendar, Lightbulb, X, Clock, LogOut } from 'lucide-react'
+import { X, LogOut } from 'lucide-react'
 
 interface SidebarProps {
   workerName: string
@@ -43,14 +43,13 @@ export default function Sidebar({
           isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
         ].join(' ')}
       >
-        {/* Logo */}
+        {/* Header with SITA logo */}
         <div className="flex items-center gap-3 px-5 py-5 border-b border-warm-border">
-          <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center text-white shrink-0"
-            style={{ background: '#2b3e2b', boxShadow: '0 4px 10px -3px rgba(43,62,43,.4)' }}
-          >
-            <ClipboardList size={18} />
-          </div>
+          <img
+            src="/sita-logo.svg"
+            alt="SITA"
+            style={{ height: 26, display: 'block', objectFit: 'contain', flexShrink: 0 }}
+          />
           <div className="flex-1 min-w-0">
             <p className="font-bold text-sm leading-tight text-warm-ink">Goal Assistant</p>
             <p className="text-[10px] font-semibold tracking-widest uppercase text-warm-ink3">Oracle HCM</p>
@@ -89,8 +88,7 @@ export default function Sidebar({
             className="w-full flex items-center justify-center gap-2 text-white font-semibold text-sm py-2.5 px-4 rounded-xl transition-all duration-150 hover:brightness-110"
             style={{ background: '#2b3e2b', boxShadow: '0 4px 10px -3px rgba(43,62,43,.35)' }}
           >
-            <Plus size={16} />
-            New Chat
+            + New Chat
           </button>
         </div>
 
@@ -102,14 +100,14 @@ export default function Sidebar({
           <p className="text-[10px] font-bold uppercase tracking-widest mb-2 text-warm-ink3">What I can do</p>
           <ul className="space-y-2">
             {[
-              { icon: <Target size={13} />,    text: 'Set SMART goals' },
-              { icon: <Search size={13} />,    text: 'Check existing goals' },
-              { icon: <Calendar size={13} />,  text: 'Update existing goals' },
-              { icon: <Lightbulb size={13} />, text: 'Role-based suggestions' },
-              { icon: <Clock size={13} />,     text: 'Track due dates' },
-            ].map(({ icon, text }) => (
+              'Set SMART goals',
+              'Check existing goals',
+              'Update existing goals',
+              'Role-based suggestions',
+              'Track due dates',
+            ].map(text => (
               <li key={text} className="flex items-center gap-2 text-xs text-warm-ink2">
-                <span style={{ color: '#2b3e2b' }}>{icon}</span>
+                <span style={{ color: '#2b3e2b', fontSize: 14, lineHeight: 1 }}>→</span>
                 {text}
               </li>
             ))}
