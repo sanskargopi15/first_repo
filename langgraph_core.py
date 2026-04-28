@@ -678,9 +678,43 @@ def post_goal_to_oracle(goal: dict, session: dict | None = None) -> str:
     return f"Goal saved successfully: {resp.json().get('GoalName')}"
 
 
+# def patch_goal_to_oracle(self_href: str, goal: dict) -> str:
+#     """PATCH an existing goal via its self href. Returns success string or raises."""
+#     # Fetch current ETag first — Oracle requires If-Match for PATCH
+#     get_resp = requests.get(self_href, auth=ORACLE_WRITE_AUTH, timeout=15)
+#     get_resp.raise_for_status()
+#     etag = get_resp.headers.get("ETag", "")
+
+#     # Log what Oracle currently stores so we can confirm field names
+#     get_data = get_resp.json()
+#     print(f"[PATCH pre-GET] StatusCode={get_data.get('StatusCode')!r}  Status={get_data.get('Status')!r}  all_keys={list(get_data.keys())}")
+
+#     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
+#     payload = {
+#         "GoalName": goal["GoalName"],
+#         "Description": goal["Description"],
+#         "StartDate": _to_oracle_date(goal["StartDate"]),
+#         "TargetCompletionDate": _to_oracle_date(goal["TargetCompletionDate"]),
+#         "StatusCode": status_val,
+#     }
+#     print(f"[PATCH sending] payload StatusCode={status_val!r}")
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Accept": "application/json",
+#         "REST-Framework-Version": "4",
+#     }
+#     if etag:
+#         headers["If-Match"] = etag
+
+#     resp = requests.patch(self_href, json=payload, auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
+#     resp.raise_for_status()
+#     resp_data = resp.json()
+#     print(f"[PATCH response] StatusCode={resp_data.get('StatusCode')!r}  Status={resp_data.get('Status')!r}")
+#     return f"Goal updated successfully: {resp_data.get('GoalName')}"
+
 def patch_goal_to_oracle(goal_id: int, goal_plan_goal_id: int, goal: dict) -> str:
-    """Update via Oracle batch POST."""
-    BATCH_URL = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
+    """Update via Oracle batch POST — PATCH gave 500 with StatusCode."""
+    BATCH_URL = f"{ORACLE_BASE_URL}/hcmRestApi/rest/rv:cbceab95-3fe1-4e78-b21a-57457d97374f/en/11.13.18.05:9/"
     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
     payload = {"parts": [{"id": f"performanceGoals{goal_id}", "operation": "update",
         "path": f"/performanceGoalsV2/{goal_id}",
@@ -983,13 +1017,14 @@ def _update_goal_progress_impl(
     percent_completion: int,
     actual_completion_date: str | None,
 ) -> str:
-    """POST to Oracle batch endpoint to update goal progress and status."""
+    """POST to Oracle batch endpoint to update goal progress and status.
+    Uses correct Content-Type and REST-Framework-Version headers."""
     # Oracle requires PercentCompletion to be a multiple of 25
     valid = [0, 25, 50, 75, 100]
     if percent_completion not in valid:
         percent_completion = min(valid, key=lambda x: abs(x - percent_completion))
 
-    url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
+    url = f"{ORACLE_BASE_URL}/hcmRestApi/rest/rv:cbceab95-3fe1-4e78-b21a-57457d97374f/en/11.13.18.05:9/"
     headers = {
         "Content-Type": "application/vnd.oracle.adf.batch+json",
         "REST-Framework-Version": "4",
