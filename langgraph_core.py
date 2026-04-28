@@ -393,8 +393,8 @@ def format_goals_as_markdown(goals: list[dict]) -> str:
     if not goals:
         return "No goals found."
     today_str = date.today().isoformat()
-    header  = "| # | GoalId | Goal Name | Status | Start Date | Due Date | Days Remaining | Overdue | Weighting |"
-    divider = "|---|--------|-----------|--------|------------|----------|----------------|---------|-----------|"
+    header  = "| # | GoalId | Goal Name | Status | Progress % | Start Date | Due Date | Days Remaining | Overdue | Weighting |"
+    divider = "|---|--------|-----------|--------|------------|------------|----------|----------------|---------|-----------|"
     rows = []
     for i, g in enumerate(goals, 1):
         due = g.get('TargetCompletionDate', '')
@@ -407,13 +407,48 @@ def format_goals_as_markdown(goals: list[dict]) -> str:
         else:
             days_rem = "N/A"
             overdue = "N/A"
+        pct = g.get('PercentCompletion', None)
+        pct_str = f"{int(pct)}%" if pct is not None else "—"
         rows.append(
             f"| {i} | {g.get('GoalId','')} | {g.get('GoalName','')} | "
-            f"{g.get('StatusCodeMeaning','')} | "
+            f"{g.get('StatusCodeMeaning','')} | {pct_str} | "
             f"{g.get('StartDate','')} | {due} | "
             f"{days_rem} | {overdue} | {g.get('Weighting','')} |"
         )
     return "\n".join([header, divider] + rows)
+
+
+# --- Progress percentage helpers using performanceGoalsV2 ---
+
+def _fetch_goal_progress_pct(goal_id: int) -> int | None:
+    """Fetch PercentCompletion for a single goal via performanceGoalsV2 findByGoalId finder."""
+    url = (
+        f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05:9/performanceGoalsV2"
+        f"?fields=GoalId,PercentCompletion"
+        f"&finder=findByGoalId;GoalId={goal_id}"
+        f"&onlyData=true"
+    )
+    try:
+        resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if items:
+            raw = items[0].get("PercentCompletion")
+            return int(raw) if raw is not None else 0
+    except Exception as exc:
+        logger.warning("_fetch_goal_progress_pct(%s) failed: %s", goal_id, exc)
+    return None
+
+
+def _enrich_goals_with_progress(goals: list[dict]) -> list[dict]:
+    """Enrich each goal dict with PercentCompletion from performanceGoalsV2.
+    Only calls the API for goals that don't already have PercentCompletion populated."""
+    for g in goals:
+        if g.get("PercentCompletion") is None:
+            goal_id = int(g.get("GoalId", 0))
+            if goal_id:
+                g["PercentCompletion"] = _fetch_goal_progress_pct(goal_id)
+    return goals
 
 
 # --- Dynamic ID fetch helpers (used by initialize_goal_session tool) ---
@@ -790,6 +825,7 @@ def _fetch_goals_impl(review_period_id: int | None = None, person_number: str = 
             )
             goals = _fetch_goals_by_period(review_period_id, person_number)
             if goals:
+                goals = _enrich_goals_with_progress(goals)
                 summary = (
                     f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
                     f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
@@ -815,6 +851,7 @@ def _fetch_goals_impl(review_period_id: int | None = None, person_number: str = 
         goals = _fetch_goals_by_period(current_period["ReviewPeriodId"], person_number)
 
         if goals:
+            goals = _enrich_goals_with_progress(goals)
             summary = (
                 f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
                 f"DepartmentName: {profile['DepartmentName']}, ManagerName: {profile['ManagerName']}, "
@@ -828,6 +865,8 @@ def _fetch_goals_impl(review_period_id: int | None = None, person_number: str = 
         # Current period has 0 goals → try previous
         if previous_period:
             goals = _fetch_goals_by_period(previous_period["ReviewPeriodId"], person_number)
+            if goals:
+                goals = _enrich_goals_with_progress(goals)
             fallback_notice = (
                 f"No goals found in current review period '{current_period['ReviewPeriodName']}'. "
                 f"Fetched {len(goals)} goals from previous review period "
@@ -1492,7 +1531,13 @@ def custom_tools_node(state: State) -> dict:
             tool_messages.append(
                 ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
             )
-            raw_goals = []
+            if content.startswith("Goal saved successfully:"):
+                _, refreshed, refreshed_periods = _fetch_goals_impl(person_number=person_number)
+                raw_goals = refreshed
+                if refreshed_periods:
+                    review_periods = refreshed_periods
+            else:
+                raw_goals = []
 
         elif name == "update_goal":
             overrides = {
@@ -1514,7 +1559,13 @@ def custom_tools_node(state: State) -> dict:
             tool_messages.append(
                 ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
             )
-            raw_goals = []
+            if content.startswith("Goal updated successfully:"):
+                _, refreshed, refreshed_periods = _fetch_goals_impl(person_number=person_number)
+                raw_goals = refreshed
+                if refreshed_periods:
+                    review_periods = refreshed_periods
+            else:
+                raw_goals = []
 
         elif name == "list_review_periods":
             try:
@@ -1611,7 +1662,10 @@ def custom_tools_node(state: State) -> dict:
                             percent_completion=pct,
                             actual_completion_date=actual_date,
                         )
-                        raw_goals = []  # force re-fetch next time
+                        _, refreshed, refreshed_periods = _fetch_goals_impl(person_number=person_number)
+                        raw_goals = refreshed
+                        if refreshed_periods:
+                            review_periods = refreshed_periods
                     except Exception as e:
                         content = f"Failed to update goal progress: {e}"
             tool_messages.append(
