@@ -1,7 +1,10 @@
 import os
+import logging
 import requests
 import json
 from datetime import date, timedelta
+
+logger = logging.getLogger(__name__)
 from dotenv import load_dotenv
 from typing import Annotated, TypedDict
 
@@ -28,7 +31,7 @@ ORACLE_WRITE_AUTH = (
     os.environ.get("ORACLE_WRITE_USER") or os.environ["ORACLE_USER"],
     os.environ.get("ORACLE_WRITE_PASSWORD") or os.environ["ORACLE_PASSWORD"],
 )
-ORACLE_PERSON_NUMBER = os.environ["ORACLE_PERSON_NUMBER"]
+# ORACLE_PERSON_NUMBER is supplied per-session from the login page (State.person_number)
 
 SYSTEM_PROMPT = f"""You are a goal setting assistant that helps employees with their professional goals and performance records. You can:
 - Set new SMART professional goals and save them
@@ -524,13 +527,13 @@ def _fetch_goal_plans(assignment_id: int, review_period_id: int, person_id: int)
     return plans
 
 
-def _auto_resolve_session() -> dict:
+def _auto_resolve_session(person_number: str) -> dict:
     """Auto-resolve all session IDs by picking primary/first options. Used as fallback."""
     session: dict = {}
-    person_id = _fetch_person_id(ORACLE_PERSON_NUMBER)
+    person_id = _fetch_person_id(person_number)
     session["PersonId"] = person_id
 
-    assignments = _fetch_assignments(ORACLE_PERSON_NUMBER)
+    assignments = _fetch_assignments(person_number)
     if not assignments:
         raise RuntimeError("No assignments found.")
     a = next((x for x in assignments if x["PrimaryAssignmentFlag"]), assignments[0])
@@ -554,7 +557,7 @@ def _auto_resolve_session() -> dict:
     return session
 
 
-def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]:
+def _initialize_goal_session_impl(session: dict, args: dict, person_number: str = "") -> tuple[str, dict]:
     """
     Step through PersonId → AssignmentId → ReviewPeriodId → GoalPlanId.
     Returns (message_for_llm, updated_session). May return early to ask user for a choice.
@@ -565,7 +568,7 @@ def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]
     try:
         # PersonId
         if "PersonId" not in session:
-            session["PersonId"] = _fetch_person_id(ORACLE_PERSON_NUMBER)
+            session["PersonId"] = _fetch_person_id(person_number)
 
         # AssignmentId
         if "AssignmentId" not in session:
@@ -574,7 +577,7 @@ def _initialize_goal_session_impl(session: dict, args: dict) -> tuple[str, dict]
                 session["AssignmentId"] = int(chosen_id)
                 session["AssignmentName"] = args.get("assignment_name", "")
             else:
-                assignments = _fetch_assignments(ORACLE_PERSON_NUMBER)
+                assignments = _fetch_assignments(person_number)
                 if not assignments:
                     return "ERROR: No assignments found for this employee.", session
                 if len(assignments) == 1:
@@ -649,10 +652,10 @@ def _strip_date(d: str) -> str:
     return d[:10] if d else d
 
 
-def post_goal_to_oracle(goal: dict, session: dict | None = None) -> str:
+def post_goal_to_oracle(goal: dict, session: dict | None = None, person_number: str = "") -> str:
     """POST a single goal dict to Oracle HCM. Returns success string or raises."""
     if not session or not session.get("GoalPlanId"):
-        session = _auto_resolve_session()
+        session = _auto_resolve_session(person_number)
 
     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
     payload = {
@@ -731,12 +734,12 @@ def patch_goal_to_oracle(goal_id: int, goal_plan_goal_id: int, goal: dict) -> st
 
 # --- Internal implementations (called by custom_tools_node) ---
 
-def _fetch_goals_by_period(review_period_id: int, limit: int = 100) -> list[dict]:
+def _fetch_goals_by_period(review_period_id: int, person_number: str = "", limit: int = 100) -> list[dict]:
     """Fetch goals using searchGoals endpoint filtered by ReviewPeriodId.
     searchGoals returns ReviewPeriodId populated and filters correctly by PersonNumber."""
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
-        f"?q=PersonNumber={ORACLE_PERSON_NUMBER};ReviewPeriodId={review_period_id}"
+        f"?q=PersonNumber={person_number};ReviewPeriodId={review_period_id}"
         f"&orderBy=GoalId:desc&limit={limit}"
     )
     resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
@@ -747,7 +750,7 @@ def _fetch_goals_by_period(review_period_id: int, limit: int = 100) -> list[dict
     return goals
 
 
-def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[dict], list[dict]]:
+def _fetch_goals_impl(review_period_id: int | None = None, person_number: str = "") -> tuple[str, list[dict], list[dict]]:
     """Fetch goals from Oracle, optionally filtered by ReviewPeriodId.
 
     Strategy:
@@ -761,7 +764,7 @@ def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[di
     try:
         # Always load worker profile
         try:
-            profile = _fetch_worker_profile(ORACLE_PERSON_NUMBER)
+            profile = _fetch_worker_profile(person_number)
         except Exception:
             profile = {
                 "WorkerName": "Unknown", "JobName": "Unknown",
@@ -776,7 +779,7 @@ def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[di
                 (p["ReviewPeriodName"] for p in all_periods if p["ReviewPeriodId"] == review_period_id),
                 f"Period {review_period_id}",
             )
-            goals = _fetch_goals_by_period(review_period_id)
+            goals = _fetch_goals_by_period(review_period_id, person_number)
             if goals:
                 summary = (
                     f"Employee profile — WorkerName: {profile['WorkerName']}, JobName: {profile['JobName']}, "
@@ -800,7 +803,7 @@ def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[di
         if not current_period:
             return "No active review periods found for this employee.", [], all_periods
 
-        goals = _fetch_goals_by_period(current_period["ReviewPeriodId"])
+        goals = _fetch_goals_by_period(current_period["ReviewPeriodId"], person_number)
 
         if goals:
             summary = (
@@ -815,7 +818,7 @@ def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[di
 
         # Current period has 0 goals → try previous
         if previous_period:
-            goals = _fetch_goals_by_period(previous_period["ReviewPeriodId"])
+            goals = _fetch_goals_by_period(previous_period["ReviewPeriodId"], person_number)
             fallback_notice = (
                 f"No goals found in current review period '{current_period['ReviewPeriodName']}'. "
                 f"Fetched {len(goals)} goals from previous review period "
@@ -852,13 +855,13 @@ def _fetch_goals_impl(review_period_id: int | None = None) -> tuple[str, list[di
         return f"Could not load goals from Oracle HCM: {exc}", [], []
 
 
-def _fetch_goal_compound_key(goal_id: int) -> tuple[int, str]:
+def _fetch_goal_compound_key(goal_id: int, person_number: str = "") -> tuple[int, str]:
     """Call searchGoals to get (GoalPlanId, compound_key) for a specific goal.
     Used exclusively to build the PATCH URL — the compound key from searchGoals
     links is the only form Oracle accepts for performanceGoals PATCH."""
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
-        f"?q=PersonNumber={ORACLE_PERSON_NUMBER};GoalId={goal_id}&limit=1"
+        f"?q=PersonNumber={person_number};GoalId={goal_id}&limit=1"
     )
     resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
     resp.raise_for_status()
@@ -922,7 +925,7 @@ def _sort_goals_data(
     return result
 
 
-def _save_goal_impl(GoalName: str, Description: str, StartDate: str, TargetCompletionDate: str, session: dict, StatusCode: str = "NOT_STARTED") -> str:
+def _save_goal_impl(GoalName: str, Description: str, StartDate: str, TargetCompletionDate: str, session: dict, StatusCode: str = "NOT_STARTED", person_number: str = "") -> str:
     """Interrupt the graph for user action, then handle the resume decision."""
     goal_data = {
         "GoalName": GoalName,
@@ -935,7 +938,7 @@ def _save_goal_impl(GoalName: str, Description: str, StartDate: str, TargetCompl
 
     if decision.get("action") == "save":
         final_data = decision.get("goal_data", goal_data)
-        return post_goal_to_oracle(final_data, session)
+        return post_goal_to_oracle(final_data, session, person_number)
     elif decision.get("action") == "silent_cancel":
         return "SILENT_CANCEL"
     return "CANCELLED: The user dismissed the form. The goal was NOT saved. Do not say it was saved."
@@ -944,6 +947,7 @@ def _save_goal_impl(GoalName: str, Description: str, StartDate: str, TargetCompl
 def _update_goal_impl(
     goal_id: int,
     raw_goals: list[dict],
+    person_number: str = "",
     overrides: dict | None = None,
 ) -> str:
     """Look up goal from already-fetched raw_goals, interrupt for user edits, then PATCH on confirm.
@@ -958,14 +962,14 @@ def _update_goal_impl(
 
     if match is None:
         # Fallback: fetch fresh from Oracle (current period)
-        _, fresh_goals, _ = _fetch_goals_impl()
+        _, fresh_goals, _ = _fetch_goals_impl(person_number=person_number)
         match = next((g for g in fresh_goals if int(g.get("GoalId", 0)) == goal_id), None)
 
     if match is None:
         return f"ERROR: Goal with ID {goal_id} not found. Please call fetch_goals first."
 
     # Fetch GoalPlanId + compound key from searchGoals — the only form Oracle accepts for PATCH.
-    goal_plan_id, compound_key = _fetch_goal_compound_key(goal_id)
+    goal_plan_id, compound_key = _fetch_goal_compound_key(goal_id, person_number)
     if not goal_plan_id or not compound_key:
         return "ERROR: Could not retrieve goal plan information. Try calling fetch_goals again."
 
@@ -989,7 +993,7 @@ def _update_goal_impl(
     # Fetch GoalPlanGoalId for batch POST RequiredGPGId
     try:
         sg = requests.get(f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
-            f"?q=PersonNumber={ORACLE_PERSON_NUMBER};GoalId={goal_id}&limit=1",
+            f"?q=PersonNumber={person_number};GoalId={goal_id}&limit=1",
             auth=ORACLE_AUTH, timeout=10)
         sg.raise_for_status()
         items = sg.json().get("items", [])
@@ -1173,13 +1177,13 @@ def _format_notes_as_markdown(notes: list[dict]) -> str:
 # --- Tool schemas (used by llm.bind_tools for LLM awareness; bodies run via custom_tools_node) ---
 
 
-def _fetch_goal_plans_for_display(review_period_id: int | None = None) -> tuple[list[dict], dict | None]:
+def _fetch_goal_plans_for_display(review_period_id: int | None = None, person_number: str = "") -> tuple[list[dict], dict | None]:
     """Fetch goal plans for the current (or specified) review period for display.
     Returns (goal_plans_list, review_period_dict).
     Resolves PersonId + AssignmentId automatically."""
     # Get PersonId + AssignmentId
-    person_id = _fetch_person_id(ORACLE_PERSON_NUMBER)
-    assignments = _fetch_assignments(ORACLE_PERSON_NUMBER)
+    person_id = _fetch_person_id(person_number)
+    assignments = _fetch_assignments(person_number)
     if not assignments:
         return [], None
     assignment = next((a for a in assignments if a["PrimaryAssignmentFlag"]), assignments[0])
@@ -1396,6 +1400,7 @@ class State(TypedDict):
     raw_goals: list[dict]
     session: dict
     review_periods: list[dict]   # cached active periods for current + previous year
+    person_number: str
 
 
 def custom_tools_node(state: State) -> dict:
@@ -1405,6 +1410,7 @@ def custom_tools_node(state: State) -> dict:
     raw_goals: list[dict] = list(state.get("raw_goals", []))  # type: ignore[call-overload]
     session: dict = dict(state.get("session", {}))  # type: ignore[call-overload]
     review_periods: list[dict] = list(state.get("review_periods", []))  # type: ignore[call-overload]
+    person_number: str = state.get("person_number", "")  # type: ignore[call-overload]
 
     for tc in last_msg.tool_calls:
         name = tc["name"]
@@ -1413,7 +1419,7 @@ def custom_tools_node(state: State) -> dict:
 
         if name == "fetch_goals":
             rp_id = int(args.get("review_period_id", 0)) or None
-            summary, goals, periods = _fetch_goals_impl(review_period_id=rp_id)
+            summary, goals, periods = _fetch_goals_impl(review_period_id=rp_id, person_number=person_number)
             raw_goals = goals
             if periods:
                 review_periods = periods  # cache periods in graph state
@@ -1458,7 +1464,7 @@ def custom_tools_node(state: State) -> dict:
                 k: v for k, v in args.items()
                 if v not in (0, "", None)
             }
-            result, session = _initialize_goal_session_impl(session, filtered_args)
+            result, session = _initialize_goal_session_impl(session, filtered_args, person_number)
             tool_messages.append(
                 ToolMessage(content=result, tool_call_id=tool_call_id, name=name)
             )
@@ -1472,6 +1478,7 @@ def custom_tools_node(state: State) -> dict:
                 TargetCompletionDate=args["TargetCompletionDate"],
                 session=session,
                 StatusCode=args.get("StatusCode", "NOT_STARTED"),
+                person_number=person_number,
             )
             tool_messages.append(
                 ToolMessage(content=content, tool_call_id=tool_call_id, name=name)
@@ -1492,6 +1499,7 @@ def custom_tools_node(state: State) -> dict:
             content = _update_goal_impl(
                 goal_id=int(args["goal_id"]),
                 raw_goals=raw_goals,
+                person_number=person_number,
                 overrides=overrides or None,
             )
             tool_messages.append(
@@ -1534,7 +1542,7 @@ def custom_tools_node(state: State) -> dict:
             else:
                 try:
                     import json as _json
-                    plans, period = _fetch_goal_plans_for_display(review_period_id=review_period_id)
+                    plans, period = _fetch_goal_plans_for_display(review_period_id=review_period_id, person_number=person_number)
                     if not plans:
                         content = "No goal plans found for this review period."
                     else:
@@ -1557,7 +1565,7 @@ def custom_tools_node(state: State) -> dict:
         elif name == "get_goal_plans":
             rp_id = int(args.get("review_period_id", 0)) or None
             try:
-                plans, period = _fetch_goal_plans_for_display(review_period_id=rp_id)
+                plans, period = _fetch_goal_plans_for_display(review_period_id=rp_id, person_number=person_number)
                 if not plans:
                     content = "No goal plans found for the current review period."
                 else:
@@ -1657,7 +1665,9 @@ def get_graph():
 
         def assistant_node(state: State):
             system = SystemMessage(content=SYSTEM_PROMPT)
-            response = llm_with_tools.invoke([system] + state["messages"])
+            msgs = state["messages"]
+            logger.info("assistant_node: %d messages in state, types=%s", len(msgs), [type(m).__name__ for m in msgs[-3:]])
+            response = llm_with_tools.invoke([system] + msgs)
             # If the LLM returned both text AND tool calls, strip the text so
             # the user never sees narration like "Now let me display your goals…"
             # The next assistant turn (after tools complete) will produce the real reply.
