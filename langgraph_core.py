@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from typing import Annotated, TypedDict
@@ -714,7 +715,7 @@ def post_goal_to_oracle(goal: dict, session: dict | None = None) -> str:
 
 def patch_goal_to_oracle(goal_id: int, goal_plan_goal_id: int, goal: dict) -> str:
     """Update via Oracle batch POST — PATCH gave 500 with StatusCode."""
-    BATCH_URL = f"{ORACLE_BASE_URL}/hcmRestApi/rest/rv:cbceab95-3fe1-4e78-b21a-57457d97374f/en/11.13.18.05:9/"
+    BATCH_URL = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
     payload = {"parts": [{"id": f"performanceGoals{goal_id}", "operation": "update",
         "path": f"/performanceGoalsV2/{goal_id}",
@@ -723,7 +724,7 @@ def patch_goal_to_oracle(goal_id: int, goal_plan_goal_id: int, goal: dict) -> st
             "TargetCompletionDate": _to_oracle_date(goal.get("TargetCompletionDate","")),
             "StatusCode": status_val, "RequiredGPGId": str(goal_plan_goal_id)}}]}
     headers = {"Content-Type": "application/vnd.oracle.adf.batch+json", "REST-Framework-Version": "4"}
-    resp = requests.post(BATCH_URL, json=payload, auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
+    resp = requests.post(BATCH_URL, data=json.dumps(payload), auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
     resp.raise_for_status()
     return f"Goal updated successfully: {goal.get('GoalName','Goal')}"
 
@@ -1024,7 +1025,7 @@ def _update_goal_progress_impl(
     if percent_completion not in valid:
         percent_completion = min(valid, key=lambda x: abs(x - percent_completion))
 
-    url = f"{ORACLE_BASE_URL}/hcmRestApi/rest/rv:cbceab95-3fe1-4e78-b21a-57457d97374f/en/11.13.18.05:9/"
+    url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
     headers = {
         "Content-Type": "application/vnd.oracle.adf.batch+json",
         "REST-Framework-Version": "4",
@@ -1042,7 +1043,7 @@ def _update_goal_progress_impl(
             }
         }]
     }
-    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, headers=headers, json=payload, timeout=15)
+    resp = requests.post(url, auth=ORACLE_WRITE_AUTH, headers=headers, data=json.dumps(payload), timeout=15)
     resp.raise_for_status()
     return f"Goal progress updated — Status: {status_code}, Completion: {percent_completion}%"
 
