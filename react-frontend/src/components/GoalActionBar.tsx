@@ -31,7 +31,23 @@ export default function GoalActionBar({
 }: GoalActionBarProps) {
   const [loading, setLoading] = useState<'submit' | 'update' | null>(null)
   const [statusCode, setStatusCode] = useState(interrupt.StatusCode || 'NOT_STARTED')
+  const [percentComplete, setPercentComplete] = useState<number>(interrupt.PercentComplete ?? 0)
   const [error, setError] = useState<string | null>(null)
+
+  const progressOptions = [0, 25, 50, 75, 100]
+
+  function handleProgressChange(val: number) {
+    setPercentComplete(val)
+    if (val === 100) setStatusCode('COMPLETED')
+    else if (val > 0) setStatusCode('IN_PROGRESS')
+    else if (statusCode === 'COMPLETED') setStatusCode('IN_PROGRESS')
+  }
+
+  function handleStatusChange(val: string) {
+    setStatusCode(val)
+    if (val === 'COMPLETED') setPercentComplete(100)
+    if (val === 'NOT_STARTED' || val === 'CANCEL') setPercentComplete(0)
+  }
 
   async function handleSubmit() {
     setLoading('submit')
@@ -51,7 +67,7 @@ export default function GoalActionBar({
     setLoading('update')
     setError(null)
     try {
-      const resp = await updateGoal(threadId, personNumber, { ...interrupt, StatusCode: statusCode })
+      const resp = await updateGoal(threadId, personNumber, { ...interrupt, StatusCode: statusCode, PercentComplete: percentComplete })
       toast.success('Goal updated in Oracle HCM!')
       onComplete(resp.messages, resp.interrupt)
     } catch (err) {
@@ -136,7 +152,7 @@ export default function GoalActionBar({
           </label>
           <select
             value={statusCode}
-            onChange={e => setStatusCode(e.target.value)}
+            onChange={e => handleStatusChange(e.target.value)}
             disabled={!showActions}
             className="w-full rounded-xl px-3 py-2 text-xs focus:outline-none transition"
             style={{
@@ -153,6 +169,47 @@ export default function GoalActionBar({
             ))}
           </select>
         </div>
+
+        {/* Progress bar — only for update flow */}
+        {isUpdate && (
+          <div className="mt-3 mb-4">
+            <label className="block text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#5d6478' }}>
+              Progress <span className="normal-case font-semibold" style={{ color: '#2b3e2b' }}>{percentComplete}%</span>
+            </label>
+            <div className="space-y-2">
+              <div className="relative h-2 rounded-full overflow-hidden" style={{ background: '#ece6d9' }}>
+                <div
+                  className="absolute left-0 top-0 h-full rounded-full transition-all duration-300"
+                  style={{ width: `${percentComplete}%`, background: percentComplete === 100 ? '#2b3e2b' : '#4a7c59' }}
+                />
+              </div>
+              <div className="flex justify-between gap-1">
+                {progressOptions.map(v => {
+                  const active = percentComplete === v
+                  const disabled = !showActions || statusCode === 'CANCEL'
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => handleProgressChange(v)}
+                      className="flex-1 text-[11px] font-semibold py-1 rounded-lg transition-all"
+                      style={{
+                        background: active ? '#2b3e2b' : '#f3f0eb',
+                        color: active ? '#fff' : '#5d6478',
+                        border: active ? '1px solid #2b3e2b' : '1px solid #ece6d9',
+                        cursor: disabled ? 'default' : 'pointer',
+                        opacity: disabled ? 0.5 : 1,
+                      }}
+                    >
+                      {v}%
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 mb-3 text-xs" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626' }}>

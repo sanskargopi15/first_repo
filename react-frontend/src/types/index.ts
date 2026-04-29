@@ -11,8 +11,8 @@ export interface GoalData {
   StartDate: string
   TargetCompletionDate: string
   StatusCode?: string
+  PercentComplete?: number
   created_at?: string
-  // Update flow fields (present only when type === 'update')
   type?: 'create' | 'update'
   SelfHref?: string
   GoalId?: number | string

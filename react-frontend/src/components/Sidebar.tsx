@@ -51,7 +51,7 @@ export default function Sidebar({
             style={{ height: 26, display: 'block', objectFit: 'contain', flexShrink: 0 }}
           />
           <div className="flex-1 min-w-0">
-            <p className="font-bold text-sm leading-tight text-warm-ink">Goal Assistant</p>
+            <p className="font-bold text-sm leading-tight text-warm-ink">Goal Setting Assistant</p>
             <p className="text-[10px] font-semibold tracking-widest uppercase text-warm-ink3">Oracle HCM</p>
           </div>
           {/* Close button — mobile only */}

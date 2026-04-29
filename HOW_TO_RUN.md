@@ -1,37 +1,18 @@
-# Running the New React + FastAPI App
+# How to Run
 
-## Start Backend (FastAPI)
-```
-cd "c:\Users\SG126591\Pictures\Demo Goal\new-app"
-& "c:\Users\SG126591\Pictures\Demo Goal\venv\Scripts\uvicorn" api:app --reload --port 8000```
+## Start Both (run in one terminal)
 
-## Start Frontend (React/Vite)
-```
-cd "c:\Users\SG126591\Pictures\Demo Goal\new-app\react-frontend"
-npm run dev
+```bash
+cd "c:\Users\SG126591\Pictures\Demo Goal\new-app" && "c:\Users\SG126591\Pictures\Demo Goal\venv\Scripts\uvicorn" api:app --reload --port 8000 > api.log 2>&1 & cd "c:\Users\SG126591\Pictures\Demo Goal\new-app\react-frontend" && npm run dev > ../frontend.log 2>&1 &
 ```
 
-Then open: http://localhost:5173
+- Backend: http://localhost:8000
+- Frontend: http://localhost:5173
 
 ---
 
-## Stop the App (PowerShell)
-```powershell
-powershell -Command "Get-Process -Name node,python,python3 -ErrorAction SilentlyContinue | Stop-Process -Force"
-```
-> **Note:** Use PowerShell to stop — `taskkill` from git bash fails silently.
+## Stop
 
----
-
-## Notes
-- The venv is located at `c:\Users\SG126591\Pictures\Demo Goal\venv`
-- Backend runs on http://localhost:8000
-- Frontend runs on http://localhost:5173
-
----
-
-## Running the OLD Streamlit App (unchanged)
-```
-cd "c:\Users\SG126591\Pictures\Demo Goal"
-venv\Scripts\streamlit run frontend.py
+```bash
+taskkill /F /IM python.exe /IM node.exe 2>nul
 ```

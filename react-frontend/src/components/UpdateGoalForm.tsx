@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { CheckCircle, X, Loader2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { format, addDays } from 'date-fns'
-import { updateGoal } from '../api/client'
+import { updateGoal, getGoalProgress } from '../api/client'
 import type { GoalData, Message } from '../types'
 
 interface UpdateGoalFormProps {
@@ -22,10 +22,38 @@ export default function UpdateGoalForm({ interrupt, threadId, personNumber, onCo
   const [startDate, setStartDate] = useState(interrupt.StartDate || todayStr)
   const [endDate, setEndDate] = useState(interrupt.TargetCompletionDate || defaultEnd)
   const [statusCode, setStatusCode] = useState(interrupt.StatusCode || 'NOT_STARTED')
+  const [percentComplete, setPercentComplete] = useState<number>(
+    interrupt.PercentComplete !== undefined ? interrupt.PercentComplete : 0
+  )
+  const [loadingPct, setLoadingPct] = useState(!!interrupt.GoalId)
   const [updating, setUpdating] = useState(false)
+
+  useEffect(() => {
+    if (!interrupt.GoalId) return
+    setLoadingPct(true)
+    getGoalProgress(interrupt.GoalId)
+      .then(pct => setPercentComplete(pct))
+      .catch(() => {/* keep existing value on error */})
+      .finally(() => setLoadingPct(false))
+  }, [interrupt.GoalId])
   const [cancelling, setCancelling] = useState(false)
   const [confirmUpdate, setConfirmUpdate] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  function handleStatusChange(newStatus: string) {
+    setStatusCode(newStatus)
+    if (newStatus === 'NOT_STARTED') setPercentComplete(0)
+    if (newStatus === 'COMPLETED') setPercentComplete(100)
+  }
+
+  function handleProgressChange(val: number) {
+    setPercentComplete(val)
+    if (val === 100) setStatusCode('COMPLETED')
+    else if (val > 0) setStatusCode('IN_PROGRESS')
+    else if (statusCode === 'COMPLETED') setStatusCode('IN_PROGRESS')
+  }
+
+  const inProgressOptions = [0, 25, 50, 75, 100]
 
   const isValid = goalName.trim() && description.trim() && startDate && endDate
 
@@ -41,6 +69,7 @@ export default function UpdateGoalForm({ interrupt, threadId, personNumber, onCo
         StartDate: startDate,
         TargetCompletionDate: endDate,
         StatusCode: statusCode,
+        PercentComplete: percentComplete,
       })
       toast.success('Goal updated in Oracle HCM!')
       onComplete(resp.messages, resp.interrupt)
@@ -153,24 +182,69 @@ export default function UpdateGoalForm({ interrupt, threadId, personNumber, onCo
             </div>
           </div>
 
-          {/* Status */}
-          <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#5d6478' }}>
-              Status
-            </label>
-            <select
-              value={statusCode}
-              onChange={e => setStatusCode(e.target.value)}
-              className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition appearance-none"
-              style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff', cursor: 'pointer' }}
-              onFocus={e => { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' }}
-              onBlur={e => { e.target.style.borderColor = '#ece6d9'; e.target.style.boxShadow = 'none' }}
-            >
-              <option value="NOT_STARTED">Not Started</option>
-              <option value="IN_PROGRESS">In Progress</option>
-              <option value="COMPLETED">Completed</option>
-              <option value="CANCEL">Cancelled</option>
-            </select>
+          {/* Status + Progress row */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#5d6478' }}>
+                Status
+              </label>
+              <select
+                value={statusCode}
+                onChange={e => handleStatusChange(e.target.value)}
+                className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition appearance-none"
+                style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff', cursor: 'pointer' }}
+                onFocus={e => { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' }}
+                onBlur={e => { e.target.style.borderColor = '#ece6d9'; e.target.style.boxShadow = 'none' }}
+              >
+                <option value="NOT_STARTED">Not Started</option>
+                <option value="IN_PROGRESS">In Progress</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="CANCEL">Cancelled</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#5d6478' }}>
+                Progress{' '}
+                {loadingPct
+                  ? <Loader2 size={10} className="inline animate-spin" style={{ color: '#8b91a4' }} />
+                  : <span className="normal-case font-semibold" style={{ color: '#2b3e2b' }}>{percentComplete}%</span>
+                }
+              </label>
+              <div className="space-y-2">
+                {/* Bar track */}
+                <div className="relative h-2 rounded-full overflow-hidden" style={{ background: '#ece6d9' }}>
+                  <div
+                    className="absolute left-0 top-0 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${percentComplete}%`, background: percentComplete === 100 ? '#2b3e2b' : '#4a7c59' }}
+                  />
+                </div>
+                {/* Step buttons */}
+                <div className="flex justify-between gap-1">
+                  {inProgressOptions.map(v => {
+                    const active = percentComplete === v
+                    const disabled = statusCode === 'CANCEL'
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => handleProgressChange(v)}
+                        className="flex-1 text-[11px] font-semibold py-1 rounded-lg transition-all"
+                        style={{
+                          background: active ? '#2b3e2b' : '#f3f0eb',
+                          color: active ? '#fff' : '#5d6478',
+                          border: active ? '1px solid #2b3e2b' : '1px solid #ece6d9',
+                          cursor: disabled ? 'default' : 'pointer',
+                          opacity: disabled ? 0.5 : 1,
+                        }}
+                      >
+                        {v}%
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Error banner */}

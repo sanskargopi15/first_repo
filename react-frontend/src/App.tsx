@@ -143,7 +143,7 @@ export default function App() {
           >
             <Menu size={20} />
           </button>
-          <span className="ml-3 font-semibold text-sm text-warm-ink">Goal Assistant</span>
+          <span className="ml-3 font-semibold text-sm text-warm-ink">Goal Setting Assistant</span>
         </div>
 
         {loading ? (

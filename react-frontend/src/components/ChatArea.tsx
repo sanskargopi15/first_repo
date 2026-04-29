@@ -102,9 +102,11 @@ export default function ChatArea({
       const resp = await sendMessage(threadId, personNumber, msg)
       setOptimisticMsg(null)
       onMessagesUpdate(resp.messages, resp.interrupt)
-    } catch {
+    } catch (err) {
       setOptimisticMsg(null)
-      toast.error('Failed to send message. Is the backend running?')
+      const detail = err instanceof Error ? err.message : String(err)
+      const isConnErr = detail.toLowerCase().includes('failed to fetch') || detail.toLowerCase().includes('networkerror')
+      toast.error(isConnErr ? 'Cannot reach the server — is the backend running?' : 'Something went wrong. Please try again.')
     } finally {
       setSending(false)
       inputRef.current?.focus()

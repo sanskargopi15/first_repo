@@ -359,13 +359,31 @@ Goal Progress Update Rules — CRITICAL:
   - IMPORTANT: Oracle only accepts multiples of 25 → valid values are 0, 25, 50, 75, 100
   - If user says a non-multiple (e.g. "30%", "60%"), tell them: "Oracle only accepts completion in steps of 25% (0, 25, 50, 75, 100). I'll round 30% to 25% — shall I proceed?" and confirm before calling
 - "Mark goal as complete" / "I completed my goal" → progress flow with StatusCode=COMPLETED, PercentCompletion=100, ask for ActualCompletionDate
+
+Status ↔ Progress Auto-Linking Rules (mirrors the UpdateGoalForm bar behavior — auto-correct silently, never contradict):
+- When user specifies ONLY a status (no explicit percent):
+  - NOT_STARTED → automatically use PercentCompletion=0
+  - COMPLETED → automatically use PercentCompletion=100; ask for ActualCompletionDate
+  - IN_PROGRESS → keep existing percent if known, otherwise ask "What completion % would you like to set? (0, 25, 50, 75, or 100)"
+- When user specifies ONLY a percent (no explicit status):
+  - 0% → automatically use StatusCode=NOT_STARTED
+  - 100% → automatically use StatusCode=COMPLETED; ask for ActualCompletionDate
+  - 25/50/75% → automatically use StatusCode=IN_PROGRESS
+- When user specifies BOTH a status AND a percent that contradict, tell the user what you're correcting (always include the goal name) and why, then proceed:
+  - NOT_STARTED + percent > 0 → say "For **[GoalName]**: since you set [X]% I'll use **In Progress** instead of Not Started." then use IN_PROGRESS
+  - COMPLETED + percent < 100 → say "For **[GoalName]**: since you marked the goal as Completed I'll set progress to **100%**." then use 100%; ask for ActualCompletionDate
+  - IN_PROGRESS + percent = 0 → say "For **[GoalName]**: since progress is 0% I'll use **Not Started** instead of In Progress." then use NOT_STARTED
+  - IN_PROGRESS + percent = 100 → say "For **[GoalName]**: since progress is 100% I'll use **Completed** instead of In Progress." then use COMPLETED; ask for ActualCompletionDate
+  - Always include the goal name in the correction message, never just silently change values
+
 - Progress flow steps:
   1. If goals not loaded → call fetch_goals() first (always fetches current review period)
   2. If no goals in current review period → tell user: "No active goals found in the current review period."
   3. If goals exist → show them as a numbered list (call sort_goals) and ask: "Which goal would you like to update progress for?"
-  4. User selects a goal → confirm: "I'll mark **[GoalName]** as [Status] at [X]% completion. Shall I proceed?"
-  5. User confirms → call update_goal_progress(goal_id, status_code, percent_completion, actual_completion_date)
-  6. On success → confirm: "✅ **[GoalName]** has been updated to [Status] at [X]% completion."
+  4. User selects a goal → apply Status ↔ Progress Auto-Linking Rules above to derive the final consistent status + percent pair; resolve any contradiction with the user before continuing
+  5. Confirm: "I'll mark **[GoalName]** as [Status] at [X]% completion. Shall I proceed?"
+  6. User confirms → call update_goal_progress(goal_id, status_code, percent_completion, actual_completion_date)
+  7. On success → confirm: "✅ **[GoalName]** has been updated to [Status] at [X]% completion."
 - NEVER call update_goal_progress without user confirmation
 - NEVER call update_goal_progress without goals being loaded first — GoalPlanGoalId is resolved from raw_goals automatically
 
@@ -421,20 +439,16 @@ def format_goals_as_markdown(goals: list[dict]) -> str:
 # --- Progress percentage helpers using performanceGoalsV2 ---
 
 def _fetch_goal_progress_pct(goal_id: int) -> int | None:
-    """Fetch PercentCompletion for a single goal via performanceGoalsV2 findByGoalId finder."""
+    """Fetch PercentCompletion for a single goal via direct performanceGoalsV2 GET."""
     url = (
-        f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05:9/performanceGoalsV2"
-        f"?fields=GoalId,PercentCompletion"
-        f"&finder=findByGoalId;GoalId={goal_id}"
-        f"&onlyData=true"
+        f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/performanceGoalsV2"
+        f"/{goal_id}?fields=GoalId,PercentCompletion"
     )
     try:
         resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
         resp.raise_for_status()
-        items = resp.json().get("items", [])
-        if items:
-            raw = items[0].get("PercentCompletion")
-            return int(raw) if raw is not None else 0
+        raw = resp.json().get("PercentCompletion")
+        return int(raw) if raw is not None else 0
     except Exception as exc:
         logger.warning("_fetch_goal_progress_pct(%s) failed: %s", goal_id, exc)
     return None
@@ -761,19 +775,58 @@ def post_goal_to_oracle(goal: dict, session: dict | None = None, person_number: 
 #     return f"Goal updated successfully: {resp_data.get('GoalName')}"
 
 def patch_goal_to_oracle(goal_id: int, goal_plan_goal_id: int, goal: dict) -> str:
-    """Update via Oracle batch POST — PATCH gave 500 with StatusCode."""
+    """Update via Oracle batch POST — PATCH gave 500 with StatusCode.
+
+    Strategy: always separate details update from progress update.
+    Step 1: batch call with GoalName, Description, dates, StatusCode (no PercentCompletion).
+    Step 2: if PercentCompletion provided, update via _update_goal_progress_impl separately.
+    """
     BATCH_URL = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/"
     status_val = goal.get("StatusCode", "NOT_STARTED") or "NOT_STARTED"
-    payload = {"parts": [{"id": f"performanceGoals{goal_id}", "operation": "update",
-        "path": f"/performanceGoalsV2/{goal_id}",
-        "payload": {"GoalName": goal.get("GoalName",""), "Description": goal.get("Description",""),
-            "StartDate": _to_oracle_date(goal.get("StartDate","")),
-            "TargetCompletionDate": _to_oracle_date(goal.get("TargetCompletionDate","")),
-            "StatusCode": status_val, "RequiredGPGId": str(goal_plan_goal_id)}}]}
     headers = {"Content-Type": "application/vnd.oracle.adf.batch+json", "REST-Framework-Version": "4"}
-    resp = requests.post(BATCH_URL, data=json.dumps(payload), auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
+
+    raw_pct = goal.get("PercentComplete")
+    pct = int(raw_pct) if raw_pct is not None else None
+    # Snap to nearest Oracle-valid multiple of 25
+    if pct is not None:
+        valid = [0, 25, 50, 75, 100]
+        _p = pct
+        pct = min(valid, key=lambda x: abs(x - _p))
+
+    details_inner = {
+        "GoalName": goal.get("GoalName", ""),
+        "Description": goal.get("Description", ""),
+        "StartDate": _to_oracle_date(goal.get("StartDate", "")),
+        "TargetCompletionDate": _to_oracle_date(goal.get("TargetCompletionDate", "")),
+        "RequiredGPGId": str(goal_plan_goal_id),
+    }
+
+    def _build_payload(inner: dict) -> dict:
+        return {"parts": [{"id": f"performanceGoals{goal_id}", "operation": "update",
+            "path": f"/performanceGoalsV2/{goal_id}", "payload": inner}]}
+
+    # --- Step 1: details update (GoalName, Description, dates, StatusCode) ---
+    resp = requests.post(BATCH_URL, data=json.dumps(_build_payload(details_inner)),
+                         auth=ORACLE_WRITE_AUTH, headers=headers, timeout=15)
     resp.raise_for_status()
-    return f"Goal updated successfully: {goal.get('GoalName','Goal')}"
+    logger.info("patch_goal_to_oracle: details updated for goal %s", goal_id)
+
+    # --- Step 2: progress update via dedicated API ---
+    if pct is not None:
+        try:
+            _update_goal_progress_impl(
+                goal_id=goal_id,
+                goal_plan_goal_id=goal_plan_goal_id,
+                status_code=status_val,
+                percent_completion=pct,
+                actual_completion_date=None,
+            )
+            logger.info("patch_goal_to_oracle: progress updated — %s%% for goal %s", pct, goal_id)
+        except Exception as e:
+            logger.error("patch_goal_to_oracle: progress update failed: %s", e)
+            return f"Goal details updated but progress % could not be saved: {e}"
+
+    return f"Goal updated successfully: {goal.get('GoalName', 'Goal')}"
 
 
 # --- Internal implementations (called by custom_tools_node) ---
@@ -1027,6 +1080,10 @@ def _update_goal_impl(
     )
 
     overrides = overrides or {}
+    # Always fetch PercentCompletion from performanceGoalsV2 — searchGoals returns 0 even when non-zero
+    fetched_pct = _fetch_goal_progress_pct(goal_id)
+    raw_pct = fetched_pct if fetched_pct is not None else (match.get("PercentCompletion") or 0)
+    logger.info("_update_goal_impl: goal_id=%s fetched_pct=%s raw_pct=%s", goal_id, fetched_pct, raw_pct)
     goal_data = {
         "type": "update",
         "GoalName": overrides.get("GoalName") or match.get("GoalName", ""),
@@ -1034,6 +1091,7 @@ def _update_goal_impl(
         "StartDate": overrides.get("StartDate") or _strip_date(match.get("StartDate", "")),
         "TargetCompletionDate": overrides.get("TargetCompletionDate") or _strip_date(match.get("TargetCompletionDate", "")),
         "StatusCode": overrides.get("StatusCode") or match.get("StatusCode", "NOT_STARTED"),
+        "PercentComplete": int(raw_pct) if raw_pct is not None else 0,
         "SelfHref": self_href,
         "GoalId": goal_id,
     }

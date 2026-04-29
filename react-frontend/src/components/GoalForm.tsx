@@ -22,10 +22,18 @@ export default function GoalForm({ interrupt, threadId, personNumber, onComplete
   const [startDate, setStartDate] = useState(interrupt.StartDate || todayStr)
   const [endDate, setEndDate] = useState(interrupt.TargetCompletionDate || defaultEnd)
   const [statusCode, setStatusCode] = useState(interrupt.StatusCode || 'NOT_STARTED')
+  const [percentComplete, setPercentComplete] = useState<number>(
+    interrupt.PercentComplete !== undefined ? interrupt.PercentComplete : 0
+  )
   const [submitting, setSubmitting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [confirmSubmit, setConfirmSubmit] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  function handleStatusChange(newStatus: string) {
+    setStatusCode(newStatus)
+    setPercentComplete(newStatus === 'COMPLETED' ? 100 : 0)
+  }
 
   const isValid = goalName.trim() && description.trim() && startDate && endDate
 
@@ -40,6 +48,7 @@ export default function GoalForm({ interrupt, threadId, personNumber, onComplete
         StartDate: startDate,
         TargetCompletionDate: endDate,
         StatusCode: statusCode,
+        PercentComplete: percentComplete,
       })
       toast.success(`Goal saved to Oracle HCM!`)
       onComplete(resp.messages, resp.interrupt)
@@ -159,7 +168,7 @@ export default function GoalForm({ interrupt, threadId, personNumber, onComplete
             </label>
             <select
               value={statusCode}
-              onChange={e => setStatusCode(e.target.value)}
+              onChange={e => handleStatusChange(e.target.value)}
               className="w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none transition appearance-none"
               style={{ border: '1px solid #ece6d9', color: '#2a2f3d', background: '#fff', cursor: 'pointer' }}
               onFocus={e => { e.target.style.borderColor = '#2b3e2b'; e.target.style.boxShadow = '0 0 0 2px rgba(43,62,43,.08)' }}

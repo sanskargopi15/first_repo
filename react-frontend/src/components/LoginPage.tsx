@@ -8,6 +8,7 @@ export default function LoginPage({ onLogin }: Props) {
   const [value, setValue] = useState('')
   const [error, setError] = useState('')
   const [focused, setFocused] = useState(false)
+  const [smartHovered, setSmartHovered] = useState(false)
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -68,7 +69,7 @@ export default function LoginPage({ onLogin }: Props) {
           </div>
 
           <h1 style={{ fontSize: 44, fontWeight: 800, color: '#fff', lineHeight: 1.12, marginBottom: 20, letterSpacing: '-.03em' }}>
-            Goal<br />Assistant
+            Goal Setting<br />Assistant
           </h1>
           <p style={{ fontSize: 15, color: 'rgba(255,255,255,.6)', lineHeight: 1.75, maxWidth: 300 }}>
             Set, track and manage your Oracle HCM performance goals with AI-powered guidance tailored to your role.
@@ -125,12 +126,48 @@ export default function LoginPage({ onLogin }: Props) {
               </svg>
             </div>
             <div>
-              <p style={{ fontWeight: 700, fontSize: 14, color: '#1a2028', lineHeight: 1.1 }}>Goal Assistant</p>
+              <p style={{ fontWeight: 700, fontSize: 14, color: '#1a2028', lineHeight: 1.1 }}>Goal Setting Assistant</p>
               <p style={{ fontSize: 12, color: '#8b91a4', marginTop: 2, fontWeight: 500 }}>Powered by SITA</p>
             </div>
           </div>
 
-          <h2 style={{ fontSize: 30, fontWeight: 800, color: '#1a2028', letterSpacing: '-.03em', marginBottom: 8 }}>Welcome back</h2>
+          <h2 style={{ fontSize: 26, fontWeight: 800, color: '#1a2028', letterSpacing: '-.03em', marginBottom: 8, whiteSpace: 'nowrap', position: 'relative' }}>
+            <span
+              style={{
+                position: 'relative',
+                cursor: 'pointer',
+                transition: 'all .2s',
+                color: smartHovered ? '#1e2e1e' : '#2b3e2b',
+                fontWeight: smartHovered ? 900 : 800
+              }}
+              onMouseEnter={() => setSmartHovered(true)}
+              onMouseLeave={() => setSmartHovered(false)}
+            >
+              SMART
+              {smartHovered && (
+                <div style={{
+                  position: 'absolute',
+                  bottom: '100%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  marginBottom: 12,
+                  background: '#1a2028',
+                  color: '#fff',
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  whiteSpace: 'nowrap',
+                  zIndex: 10,
+                  pointerEvents: 'none',
+                  boxShadow: '0 4px 12px rgba(0,0,0,.15)',
+                }}>
+                  Specific • Measurable • Achievable • Relevant • Time-bound
+                </div>
+              )}
+            </span>
+            {' '}Goals, Smarter You
+          </h2>
           <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 36, lineHeight: 1.7 }}>
             Enter your Oracle Person Number to access and manage your performance goals.
           </p>

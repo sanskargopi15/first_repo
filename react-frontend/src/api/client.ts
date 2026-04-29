@@ -64,6 +64,13 @@ export async function resumeGraph(
   return r.json()
 }
 
+export async function getGoalProgress(goalId: number | string): Promise<number> {
+  const r = await fetch(`${BASE}/api/goal-progress/${goalId}`)
+  await checkOk(r)
+  const data = await r.json()
+  return data.PercentCompletion ?? 0
+}
+
 export async function updateGoal(
   threadId: string,
   personNumber: string,

@@ -22,6 +22,7 @@ from langgraph_core import (
     get_text,
     ORACLE_BASE_URL,
     ORACLE_AUTH,
+    _fetch_goal_progress_pct,
 )
 
 app = FastAPI(title="Goal Setting Assistant API")
@@ -45,8 +46,8 @@ class ChatRequest(BaseModel):
 class ResumeRequest(BaseModel):
     thread_id: str
     action: str
-    person_number: str
     goal_data: Optional[dict] = None
+    person_number: Optional[str] = None
 
 
 # In-memory timestamp cache: msg_id → ISO timestamp string.
@@ -136,6 +137,12 @@ async def new_thread():
     return {"thread_id": str(uuid.uuid4())}
 
 
+@app.get("/api/goal-progress/{goal_id}")
+async def get_goal_progress(goal_id: int):
+    pct = _fetch_goal_progress_pct(goal_id)
+    return {"GoalId": goal_id, "PercentCompletion": pct if pct is not None else 0}
+
+
 @app.get("/api/messages/{thread_id}")
 async def get_thread_messages(thread_id: str):
     return build_response(thread_id)
@@ -172,5 +179,6 @@ async def resume(req: ResumeRequest):
     try:
         graph.invoke(Command(resume=resume_payload), config)
     except Exception as e:
+        logger.exception("resume error: thread=%s action=%s", req.thread_id, req.action)
         raise HTTPException(status_code=500, detail=str(e))
     return build_response(req.thread_id)
