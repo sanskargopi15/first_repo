@@ -2,6 +2,8 @@ import os
 import logging
 import requests
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,19 @@ ORACLE_WRITE_AUTH = (
     os.environ.get("ORACLE_WRITE_PASSWORD") or os.environ["ORACLE_PASSWORD"],
 )
 # ORACLE_PERSON_NUMBER is supplied per-session from the login page (State.person_number)
+
+# --- Simple TTL cache for stable Oracle data (worker profile, review periods, etc.) ---
+_CACHE_TTL = 300  # 5 minutes
+_cache: dict[str, tuple[float, object]] = {}
+
+def _cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and (time.time() - entry[0]) < _CACHE_TTL:
+        return entry[1]
+    return None
+
+def _cache_set(key: str, val) -> None:
+    _cache[key] = (time.time(), val)
 
 SYSTEM_PROMPT = f"""You are a goal setting assistant that helps employees with their professional goals and performance records. You can:
 - Set new SMART professional goals and save them
@@ -471,25 +486,42 @@ def _fetch_goal_progress_pct(goal_id: int) -> int | None:
 
 def _enrich_goals_with_progress(goals: list[dict]) -> list[dict]:
     """Enrich each goal dict with PercentCompletion from performanceGoalsV2.
-    Only calls the API for goals that don't already have PercentCompletion populated."""
-    for g in goals:
-        if g.get("PercentCompletion") is None:
-            goal_id = int(g.get("GoalId", 0))
-            if goal_id:
-                g["PercentCompletion"] = _fetch_goal_progress_pct(goal_id)
+    Fires all per-goal API calls concurrently instead of serially."""
+    needs = [(i, int(g.get("GoalId", 0))) for i, g in enumerate(goals)
+             if g.get("PercentCompletion") is None and g.get("GoalId")]
+    if not needs:
+        return goals
+
+    def _fetch_one(item: tuple[int, int]) -> tuple[int, int | None]:
+        idx, goal_id = item
+        return idx, _fetch_goal_progress_pct(goal_id)
+
+    with ThreadPoolExecutor(max_workers=min(len(needs), 10)) as ex:
+        for idx, pct in ex.map(_fetch_one, needs):
+            goals[idx]["PercentCompletion"] = pct
     return goals
 
 
 # --- Dynamic ID fetch helpers (used by initialize_goal_session tool) ---
 
 def _fetch_person_id(person_number: str) -> int:
+    key = f"person_id:{person_number}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
     url = f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/workers?q=PersonNumber={person_number}"
     resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
     resp.raise_for_status()
-    return int(resp.json()["items"][0]["PersonId"])
+    result = int(resp.json()["items"][0]["PersonId"])
+    _cache_set(key, result)
+    return result
 
 
 def _fetch_assignments(person_number: str) -> list[dict]:
+    key = f"assignments:{person_number}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/publicWorkers"
         f"?q=PersonNumber={person_number}&expand=all"
@@ -497,7 +529,7 @@ def _fetch_assignments(person_number: str) -> list[dict]:
     resp = requests.get(url, auth=ORACLE_AUTH, timeout=10)
     resp.raise_for_status()
     raw = resp.json()["items"][0].get("assignments", [])
-    return [
+    result = [
         {
             "AssignmentId": int(a["AssignmentId"]),
             "AssignmentName": a.get("AssignmentName", ""),
@@ -505,10 +537,16 @@ def _fetch_assignments(person_number: str) -> list[dict]:
         }
         for a in raw
     ]
+    _cache_set(key, result)
+    return result
 
 
 def _fetch_worker_profile(person_number: str) -> dict:
     """Fetch worker display name, job, department, manager and location from publicWorkers."""
+    key = f"worker_profile:{person_number}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached  # type: ignore[return-value]
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/publicWorkers"
         f"?q=PersonNumber={person_number}&expand=all"
@@ -518,18 +556,23 @@ def _fetch_worker_profile(person_number: str) -> dict:
     item = resp.json()["items"][0]
     assignments = item.get("assignments", [])
     primary = next((a for a in assignments if a.get("PrimaryFlag")), assignments[0] if assignments else {})
-    return {
+    result = {
         "WorkerName": item.get("DisplayName") or "Unknown",
         "JobName": primary.get("JobName") or "Unknown",
         "DepartmentName": primary.get("DepartmentName") or "Unknown",
         "ManagerName": primary.get("ManagerName") or "Unknown",
         "Location": primary.get("LocationName") or "Unknown",
     }
+    _cache_set(key, result)
+    return result
 
 
 def _fetch_all_review_periods() -> list[dict]:
     """Fetch all review periods from Oracle (no date or status filter).
     Returns list sorted by StartDate descending (most recent first)."""
+    cached = _cache_get("review_periods")
+    if cached is not None:
+        return cached  # type: ignore[return-value]
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/latest/reviewPeriods"
         "?onlyData=true&limit=100"
@@ -546,15 +589,18 @@ def _fetch_all_review_periods() -> list[dict]:
         for rp in resp.json().get("items", [])
     ]
     periods.sort(key=lambda p: (p.get("StartDate", ""), p["ReviewPeriodId"]), reverse=True)
+    _cache_set("review_periods", periods)
     return periods
 
 
-def _identify_current_and_previous_periods() -> tuple[dict | None, dict | None]:
+def _identify_current_and_previous_periods(periods: list[dict] | None = None) -> tuple[dict | None, dict | None]:
     """Return (current_period, previous_period) based on today's date.
     Current = period whose date range contains today, or most recently started.
-    Previous = the one before current."""
+    Previous = the one before current.
+    Accepts an already-fetched periods list to avoid a redundant Oracle call."""
     today_str = date.today().isoformat()
-    periods = _fetch_all_review_periods()
+    if periods is None:
+        periods = _fetch_all_review_periods()
     if not periods:
         return None, None
 
@@ -601,19 +647,27 @@ def _fetch_goal_plans(assignment_id: int, review_period_id: int, person_id: int)
 
 
 def _auto_resolve_session(person_number: str) -> dict:
-    """Auto-resolve all session IDs by picking primary/first options. Used as fallback."""
+    """Auto-resolve all session IDs by picking primary/first options. Used as fallback.
+    Fetches PersonId, assignments, and review periods in parallel (they're independent),
+    then fetches goal plans once all three results are available."""
     session: dict = {}
-    person_id = _fetch_person_id(person_number)
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_person = ex.submit(_fetch_person_id, person_number)
+        f_assignments = ex.submit(_fetch_assignments, person_number)
+        f_periods = ex.submit(_fetch_all_review_periods)
+        person_id = f_person.result()
+        assignments = f_assignments.result()
+        periods = f_periods.result()
+
     session["PersonId"] = person_id
 
-    assignments = _fetch_assignments(person_number)
     if not assignments:
         raise RuntimeError("No assignments found.")
     a = next((x for x in assignments if x["PrimaryAssignmentFlag"]), assignments[0])
     session["AssignmentId"] = a["AssignmentId"]
     session["AssignmentName"] = a["AssignmentName"]
 
-    periods = _fetch_all_review_periods()
     if not periods:
         raise RuntimeError("No active review periods found.")
     rp = periods[0]
@@ -911,7 +965,7 @@ def _fetch_goals_impl(review_period_id: int | None = None, person_number: str = 
             return summary, goals, all_periods
 
         # ── No period specified → use current, fallback to previous ───────────
-        current_period, previous_period = _identify_current_and_previous_periods()
+        current_period, previous_period = _identify_current_and_previous_periods(periods=all_periods)
 
         if not current_period:
             return "No active review periods found for this employee.", [], all_periods
@@ -971,10 +1025,9 @@ def _fetch_goals_impl(review_period_id: int | None = None, person_number: str = 
         return f"Could not load goals from Oracle HCM: {exc}", [], []
 
 
-def _fetch_goal_compound_key(goal_id: int, person_number: str = "") -> tuple[int, str]:
-    """Call searchGoals to get (GoalPlanId, compound_key) for a specific goal.
-    Used exclusively to build the PATCH URL — the compound key from searchGoals
-    links is the only form Oracle accepts for performanceGoals PATCH."""
+def _fetch_goal_compound_key(goal_id: int, person_number: str = "") -> tuple[int, str, int]:
+    """Call searchGoals to get (GoalPlanId, compound_key, GoalPlanGoalId) for a specific goal.
+    Single call returns all three values needed for PATCH — avoids a second searchGoals call."""
     url = (
         f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
         f"?q=PersonNumber={person_number};GoalId={goal_id}&limit=1"
@@ -983,13 +1036,14 @@ def _fetch_goal_compound_key(goal_id: int, person_number: str = "") -> tuple[int
     resp.raise_for_status()
     items = resp.json().get("items", [])
     if not items:
-        return 0, ""
+        return 0, "", 0
     g = items[0]
     goal_plan_id = int(g.get("GoalPlanId", 0))
+    gpg_id = int(g.get("GoalPlanGoalId", 0))
     links = g.get("links", [])
     search_self = next((lnk["href"] for lnk in links if lnk.get("rel") == "self"), "")
     compound_key = search_self.split("/")[-1] if search_self else ""
-    return goal_plan_id, compound_key
+    return goal_plan_id, compound_key, gpg_id
 
 
 def _sort_goals_data(
@@ -1084,10 +1138,12 @@ def _update_goal_impl(
     if match is None:
         return f"ERROR: Goal with ID {goal_id} not found. Please call fetch_goals first."
 
-    # Fetch GoalPlanId + compound key from searchGoals — the only form Oracle accepts for PATCH.
-    goal_plan_id, compound_key = _fetch_goal_compound_key(goal_id, person_number)
+    # Single searchGoals call returns GoalPlanId, compound key, and GoalPlanGoalId together.
+    goal_plan_id, compound_key, gpg_id = _fetch_goal_compound_key(goal_id, person_number)
     if not goal_plan_id or not compound_key:
         return "ERROR: Could not retrieve goal plan information. Try calling fetch_goals again."
+
+    match["GoalPlanGoalId"] = gpg_id
 
     self_href = (
         f"{ORACLE_BASE_URL}:443/hcmRestApi/resources/11.13.18.05/goalPlans"
@@ -1110,18 +1166,6 @@ def _update_goal_impl(
         "SelfHref": self_href,
         "GoalId": goal_id,
     }
-
-    # Fetch GoalPlanGoalId for batch POST RequiredGPGId
-    try:
-        sg = requests.get(f"{ORACLE_BASE_URL}/hcmRestApi/resources/11.13.18.05/searchGoals"
-            f"?q=PersonNumber={person_number};GoalId={goal_id}&limit=1",
-            auth=ORACLE_AUTH, timeout=10)
-        sg.raise_for_status()
-        items = sg.json().get("items", [])
-        if items:
-            match["GoalPlanGoalId"] = items[0].get("GoalPlanGoalId", 0)
-    except Exception:
-        pass
 
     decision = interrupt(goal_data)
 
@@ -1643,8 +1687,8 @@ def custom_tools_node(state: State) -> dict:
         elif name == "list_review_periods":
             try:
                 import json as _json
-                current, _ = _identify_current_and_previous_periods()
                 periods = _fetch_all_review_periods()
+                current, _ = _identify_current_and_previous_periods(periods=periods)
                 if not periods:
                     content = "No active review periods found."
                 else:
